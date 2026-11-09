@@ -137,6 +137,10 @@ def follow_directions(lanes, segs, rel_p, weight):
 
 BUSIER = "guitar_busier"  # catches more fast notes and adds more extras than the default guitar
 CLEANER_THR = 0.1         # how much surer the model must be of a note for the cleaner style
+# Note threshold chosen by the owner for a specific model file, over its calibrated value. Bass
+# 33b5d457: 0.40 -> 0.30 misses a quarter fewer notes on test songs for ~2 points more extras.
+# Keyed by fingerprint so a new model uses its own; new charts only, never train/* (decode_settings).
+PLAY_THR = {"33b5d457": 0.30}
 
 
 def fretted_notes(kind: str, wave: np.ndarray, sr: int, with_features=False, style: str = "normal"):
@@ -148,6 +152,7 @@ def fretted_notes(kind: str, wave: np.ndarray, sr: int, with_features=False, sty
     prob, feats = probabilities(model, wave, sr, with_features=True)
     settings = decode_settings(model)
     if model == kind:  # what the owner has said about this model's charts
+        settings["thr"] = PLAY_THR.get(model_tag(kind), settings["thr"])
         settings = feedback.tuned(kind, settings, model_tag(kind))
     if style == "cleaner":
         settings["thr"] += CLEANER_THR
