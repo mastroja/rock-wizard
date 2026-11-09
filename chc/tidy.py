@@ -16,8 +16,10 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
+import unicodedata
 
 SONG_MARKERS = ("song.ini", "notes.chart", "notes.mid")
+NUMBERED = re.compile(r"^\d+[.)]\s+")  # "02. The Who - Squeeze Box": a setlist position
 PARENS = re.compile(r"\s*\([^()]*\)")
 BRACKETS = re.compile(r"\s*\[[^\[\]]*\]")
 UNDO_LOG = ".chc_rename_log.json"
@@ -38,8 +40,25 @@ def read_ini(folder: Path) -> dict:
 
 
 def _key(name: str) -> str:
-    """Name for comparing: no capitals, '&' as 'and', letters and digits only."""
-    return re.sub(r"[^a-z0-9]", "", name.lower().replace("&", "and"))
+    """Name for comparing: no capitals or accents, '&' as 'and', letters and digits only."""
+    plain = "".join(ch for ch in unicodedata.normalize("NFKD", name) if not unicodedata.combining(ch))
+    return re.sub(r"[^a-z0-9]", "", plain.lower().replace("&", "and"))
+
+
+def _same_title(a: str, b: str) -> bool:
+    """Same song title; "One/Two" in a song.ini is "One & Two" in a folder name."""
+    return _key(a) == _key(b) or _key(a.replace("/", "&")) == _key(b) or _key(a) == _key(b.replace("/", "&"))
+
+
+def _same_artist(a: str, b: str) -> bool:
+    """Same act, even if one name is the fuller one ("Ramones" / "The Ramones",
+    "Wings" / "Paul McCartney & Wings")."""
+    x, y = ({_key(w) for w in n.split()} - {""} for n in (a, b))
+    return _key(a) == _key(b) or bool(x and y and (x <= y or y <= x))
+
+
+def _accents(text: str) -> int:
+    return sum(1 for ch in text if ord(ch) > 127 and ch.isalpha())
 
 
 def ini_name(folder: Path) -> str | None:
@@ -77,6 +96,7 @@ class Proposal:
     note: str = ""      # why it cannot be applied, if so
     selected: bool = True
     ini_only: bool = False  # the folder name is fine; only song.ini's capitals change
+    check: str = ""     # why it starts unticked: only a person can say which spelling is right
 
     @property
     def ok(self) -> bool:
@@ -90,6 +110,7 @@ def is_song_folder(p: Path) -> bool:
 # ---------- capitals ----------
 SMALL = {"a", "an", "the", "and", "but", "or", "nor", "for", "of", "on", "in", "at", "to", "by", "vs", "vs.",
          "with", "from", "as", "per", "via", "feat", "feat.", "ft", "ft.", "n", "o", "de", "la", "le", "x"}
+STYLE_SMALL = {"a", "an", "the", "and", "or", "of", "on", "in", "at", "to", "for", "by", "with", "from"}
 
 
 def fix_case(text: str, artist_map: dict | None = None) -> str:
@@ -102,7 +123,9 @@ def fix_case(text: str, artist_map: dict | None = None) -> str:
     if re.search(r"[À-ÿ]", text):  # accented letters: probably not English, whose title rules differ
         return text
     letters = re.sub(r"[^A-Za-z]", "", text)
-    shouted = len(text.split()) > 1 and letters.isupper() and len(letters) > 3
+    # (a name of only one- and two-letter words, like "AC DC", is initials, not shouting)
+    shouted = (len(text.split()) > 1 and letters.isupper() and len(letters) > 3
+               and any(len(re.sub(r"[^A-Za-z]", "", w)) > 2 for w in text.split()))
     words = text.split(" ")
     out = []
     for i, w in enumerate(words):
@@ -159,7 +182,15 @@ def artist_spellings(*roots: Path) -> dict:
         inner = sum(ch.isupper() for w in words for ch in w[1:])
         small_low = sum(1 for i, w in enumerate(words) if 0 < i < len(words) - 1 and w in SMALL)
         return inner, small_low, count
-    return {k: max(c.items(), key=rank)[0] for k, c in seen.items() if k}
+    return {k: _plain_small_words(max(c.items(), key=rank)[0]) for k, c in seen.items() if k}
+
+
+def _plain_small_words(artist: str) -> str:
+    """Charters often type "Band Of Horses"; the band is "Band of Horses". Only Title-case small
+    words in mid-name change, so deliberate styling (KISS, TV) and foreign names (Al Di Meola) stay."""
+    words = artist.split(" ")
+    return " ".join(w.lower() if 0 < i < len(words) - 1 and w.istitle() and w.lower() in STYLE_SMALL else w
+                    for i, w in enumerate(words))
 
 
 def _split_name(name: str) -> tuple[str, str]:
@@ -167,17 +198,40 @@ def _split_name(name: str) -> tuple[str, str]:
     return (a, t) if sep else ("", name)
 
 
+def _choose(folder: str, ini: str, trust_ini: bool = False) -> str:
+    """Folder name or song.ini name, when both are this song's name. The same song keeps the
+    folder's spelling (minus any setlist number), since song.ini is often the sloppier of the two,
+    unless song.ini has accents the folder lacks ("Queensrÿche"). trust_ini: the user just typed
+    the song.ini details, so a different artist name is a correction."""
+    bare = NUMBERED.sub("", folder)
+    (fa, ft), (ia, it) = _split_name(bare), _split_name(ini)
+    artists_match = _key(fa) == _key(ia) if trust_ini else _same_artist(fa, ia)
+    if _key(bare) == _key(ini) or (fa and artists_match and _same_title(ft, it)):
+        return ini if _accents(ini) > _accents(bare) else bare
+    return ini
+
+
+def _word_change(folder: str, new: str) -> str:
+    """Why this rename needs a person: the folder is already "Artist - Title" and song.ini has
+    other words. Either side can be the typo ("Sliences", "All Nite" vs "All Night")."""
+    fa, ft = _split_name(NUMBERED.sub("", folder))
+    na, nt = _split_name(new)
+    if not fa or (_same_artist(fa, na) and _same_title(ft, nt)):
+        return ""
+    return "song.ini words it differently, check which is right"
+
+
 def proposed_name(c: Path, parens: bool = True, brackets: bool = True, from_ini: bool = True,
-                  caps: bool = False, artist_map: dict | None = None) -> str:
+                  caps: bool = False, artist_map: dict | None = None, trust_ini: bool = False) -> str:
     """The tidy folder name for one song folder (the same rules as scan)."""
     cleaned = clean_name(c.name, parens, brackets)
-    base = (ini_name(c) if from_ini else None) or cleaned
-    new = clean_name(base, parens, brackets)
-    if _key(new) == _key(cleaned):
-        new = cleaned  # same words: keep the folder's own spelling and capitals
+    base = ini_name(c) if from_ini else None
+    new = _choose(cleaned, clean_name(base, parens, brackets), trust_ini) if base else cleaned
     if caps:
         a, t = _split_name(new)
         new = f"{fix_case(a, artist_map)} - {fix_case(t)}" if a else fix_case(t)
+    # "AC/DC" must not become "ACDC" or "One/Two" become "OneTwo"
+    new = re.sub(r"\s*[/\\]\s*", " ", new)
     # Windows forbids some characters, and trailing dots or spaces
     return BAD_CHARS.sub("", new).rstrip(" .").strip() or c.name
 
@@ -188,7 +242,7 @@ def tidy_one(folder: Path, parens: bool = True, brackets: bool = True, caps: boo
     clean the title in song.ini, fix capitals, and rename the folder 'Artist - Song Title'.
     Raises FileExistsError if that name is taken. Returns the folder's new path."""
     _fix_ini(folder, parens, brackets, caps, artist_map)
-    target = folder.with_name(proposed_name(folder, parens, brackets, True, caps, artist_map))
+    target = folder.with_name(proposed_name(folder, parens, brackets, True, caps, artist_map, trust_ini=True))
     if str(target) != str(folder):  # Windows paths compare without capitals
         if target.exists() and target.resolve() != folder.resolve():
             raise FileExistsError(target.name)
@@ -223,7 +277,8 @@ def scan(root: Path, parens: bool = True, brackets: bool = True, from_ini: bool 
                         note = "another song would get the same name"
                     else:
                         taken.add(target)
-                    found.append(Proposal(c, new, note, selected=not note))
+                    check = "" if note else _word_change(clean_name(c.name, parens, brackets), new)
+                    found.append(Proposal(c, new, note, selected=not (note or check), check=check))
             else:
                 walk(c)
     walk(root)

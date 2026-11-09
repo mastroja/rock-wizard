@@ -36,7 +36,8 @@ def load(kind: str, device="cuda"):
         if fkind not in features.KINDS or nn.instrument(fkind) != nn.instrument(kind):
             fkind = kind
         n_out = ck.get("n_out") or ck["state"]["out.weight"].shape[0]  # older models have 5 outputs
-        m = nn.NoteNet(fkind, ck.get("hidden", 128), n_out, ck.get("context", False), ck.get("down", nn.DOWN)).to(device)
+        m = nn.NoteNet(fkind, ck.get("hidden", 128), n_out, ck.get("context", False), ck.get("down", nn.DOWN),
+                       ck.get("layers", 0), ck.get("wide", 1)).to(device)
         m.load_state_dict(ck["state"])
         m.eval()
         _cache[kind] = (m, ck.get("thr", 0.4))
@@ -86,7 +87,7 @@ MIN_SUSTAIN = 0.30  # seconds; shorter held notes are charted as plain notes
 
 def decode_settings(kind: str) -> dict:
     """Decoding thresholds tuned on validation songs (train.calibrate), else defaults."""
-    return {"thr": 0.35, "ratios": CHORD_RATIO[kind], "hopo": 0.5, "sus": 0.5, "rel": 1.0,
+    return {"thr": 0.35, "ratios": CHORD_RATIO[nn.instrument(kind)], "hopo": 0.5, "sus": 0.5, "rel": 1.0,
             "size_bias": [1.0, 1.0], **_settings.get(kind, {})}
 
 
@@ -134,12 +135,21 @@ def follow_directions(lanes, segs, rel_p, weight):
     return [tuple(sorted(l - lo + a for l in ln)) for ln, lo, a in zip(lanes, lowest, anchors)]
 
 
-def fretted_notes(kind: str, wave: np.ndarray, sr: int, with_features=False):
+BUSIER = "guitar_busier"  # catches more fast notes and adds more extras than the default guitar
+CLEANER_THR = 0.1         # how much surer the model must be of a note for the cleaner style
+
+
+def fretted_notes(kind: str, wave: np.ndarray, sr: int, with_features=False, style: str = "normal"):
     """Guitar/bass -> [(time_s, (lanes...), sustain_s, hammer_on or None, confidence)]
-    (plus the model's input features with with_features, for finding repeated sections)."""
-    load(kind)
-    prob, feats = probabilities(kind, wave, sr, with_features=True)
-    notes = decode_fretted(kind, prob, **decode_settings(kind))
+    (plus the model's input features with with_features, for finding repeated sections).
+    style: "normal", "cleaner" (fewer notes) or "busier" (guitar only: the model that charts more)."""
+    model = BUSIER if style == "busier" else kind
+    load(model)
+    prob, feats = probabilities(model, wave, sr, with_features=True)
+    settings = decode_settings(model)
+    if style == "cleaner":
+        settings["thr"] += CLEANER_THR
+    notes = decode_fretted(kind, prob, **settings)
     return (notes, feats) if with_features else notes
 
 

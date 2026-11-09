@@ -18,7 +18,7 @@ def load(path):
     ck = torch.load(path, map_location="cuda", weights_only=False)
     kind = ck.get("kind")
     m = cnn.NoteNet(kind, ck.get("hidden", 128), ck["state"]["out.weight"].shape[0], ck.get("context", False),
-                     ck.get("down", cnn.DOWN)).cuda()
+                     ck.get("down", cnn.DOWN), ck.get("layers", 0), ck.get("wide", 1)).cuda()
     m.load_state_dict(ck["state"])
     m.eval()
     return ck, kind, m, data.Layout(ck.get("data", "v2"), ck.get("dm_src", "ft"))

@@ -264,7 +264,7 @@ function renderQueue() {
       const v = j.result && j.result.verdict && VERDICT[j.result.verdict];
       return `<div class="card">
         <div class="row spread"><div class="grow"><b class="ellipsis" style="display:block">${esc(j.title)}</b>
-          <div class="faint">${j.kind === "update" ? "Updating chart · " : ""}${esc(step)}${j.by ? ` · from ${esc(j.by)}` : ""}</div></div>
+          <div class="faint">${{ update: "Updating chart · ", rechart: "Recharting · " }[j.kind] || ""}${esc(step)}${j.by ? ` · from ${esc(j.by)}` : ""}</div></div>
           <span class="chip ${cc}">${ct}</span></div>
         ${j.status === "running" || j.status === "queued" ? `<div class="bar" style="margin-top:12px"><i style="width:${Math.round(j.progress * 100)}%"></i></div>` : ""}
         <div class="row" style="margin-top:12px">
@@ -347,11 +347,18 @@ async function renderStaging(reviewAll = false) {
           <div class="row wrap" style="margin-top:8px;gap:6px">
             ${v ? `<span class="chip ${v[0]}">${v[0] === "green" ? "✓" : v[0] === "yellow" ? "!" : "✕"} ${v[0] === "green" ? "OK" : v[0] === "yellow" ? "Check" : "Problems"}</span>` : `<span class="chip">Not checked</span>`}
             ${s.status === "reviewed" ? `<span class="chip accent">Reviewed</span>` : ""}${byChip(s)}
+            ${owner() ? `<button class="btn small danger" data-del="${esc(s.folder)}" data-title="${esc(s.title || s.name)}" style="margin-left:auto">Delete</button>` : ""}
           </div></div></div>`;
     }).join("")}</div>` : `<div class="card empty">No songs here yet.</div>`}`;
   $$("[data-filter]").forEach((b) => b.onclick = () => { stagingFilter = b.dataset.filter; renderStaging(); });
   wireSort("staging", () => renderStaging());
   $$("[data-open]").forEach((c) => c.onclick = () => openReview(c.dataset.open));
+  $$("[data-del]").forEach((b) => b.onclick = (e) => { e.stopPropagation(); deleteFromStaging(b.dataset.del, b.dataset.title); });
+}
+
+async function deleteFromStaging(folder, title) {
+  if (!confirm(`Delete “${title}” from staging?\n\nIt goes to the Recycle Bin, so you can still get it back.`)) return;
+  try { await post("/api/staging/remove", { folder }); toast("Moved to the Recycle Bin"); closeDrawer(); renderStaging(); } catch (e) { toast(e.message); }
 }
 
 function closeDrawer() { $$(".scrim, .drawer").forEach((e) => e.remove()); }
@@ -359,7 +366,7 @@ function closeDrawer() { $$(".scrim, .drawer").forEach((e) => e.remove()); }
 // how a chart plays, rated per part after playing it (friends too); the training runs read these
 const RATE = [["good", "Good"], ["ok", "OK"], ["bad", "Bad"]];
 function rateHTML(s) {
-  const parts = ["guitar", "bass", "drums"].filter((k) => s.tiers[k] !== "-1" && (s.tiers[k] || s.stems.includes(k)));
+  const parts = ["guitar", "bass", "drums", "vocals"].filter((k) => s.tiers[k] !== "-1" && (s.tiers[k] || (k !== "vocals" && s.stems.includes(k))));
   if (!parts.length) return "";
   return `<div class="card"><h2>How does it play?</h2>
     <p class="faint" style="margin-top:0">Played it? Rate each part. The next training runs use this to see what to fix.</p>
@@ -386,6 +393,77 @@ function wireRating(dr, s) {
   const saveNote = async () => { try { await send({ note: note.value }); toast("Note saved"); } catch (e) { toast(e.message); } };
   $("#savenote", dr).onclick = saveNote;
   note.onkeydown = (e) => { if (e.key === "Enter") saveNote(); };
+}
+
+// keep or redo a song part by part
+const RC_LEVEL = { expert: "Expert", hard: "Hard", medium: "Medium", easy: "Easy" };
+function rcLabel(v, c) {
+  return { keep: c.by === "ai" ? "Keep (AI)" : "Keep (yours)", ai: c.have ? "Redo with AI" : "Make with AI", make: "From Expert",
+    words: "AI melody, your words", empty: c.have ? "Remove" : "Leave empty", none: c.have ? "Remove" : "Leave empty" }[v];
+}
+const rcSelect = (c, attrs) => `<select ${attrs}>${c.choices.map((v) => `<option value="${v}"${v === c.pick ? " selected" : ""}>${rcLabel(v, c)}</option>`).join("")}</select>`;
+
+function rechartHTML(o) {
+  if (o.blocked) return `<div class="card"><h2>Rechart</h2><p class="faint" style="margin:0">Can't rechart this song: ${esc(o.blocked)}.</p></div>`;
+  return `<div class="card"><h2>Rechart</h2>
+    <p class="faint" style="margin-top:0">Choose what stays and what gets redone. Anything you keep stays note for note.</p>
+    ${Object.entries(o.parts).map(([inst, row]) => `<div class="rc-row"><div class="rc-name">${inst}</div><div class="rc-levels">
+      ${o.levels.map((lv) => `<label><span class="faint">${RC_LEVEL[lv]}</span>${rcSelect(row[lv], `data-rc="${inst}" data-lv="${lv}"`)}</label>`).join("")}</div></div>`).join("")}
+    <div class="rc-row"><div class="rc-name">vocals</div><div class="rc-levels"><label><span class="faint">${o.vocals.have === "words" ? "Your lyrics" : "Part"}</span>${rcSelect(o.vocals, `data-rc="vocals"`)}</label></div></div>
+    <div class="rc-row rc-levels" id="rc-more">
+      <label id="rc-stylebox"><span class="faint">AI guitar style</span><select id="rc-style">${o.styles.map((v) => `<option value="${v}">${{ normal: "Normal", cleaner: "Cleaner (fewer notes)", busier: "Busier (more notes)" }[v]}</option>`).join("")}</select></label>
+      ${o.sections.length ? `<label id="rc-sectionbox"><span class="faint">Redo with AI in</span><select id="rc-section"><option value="">Whole song</option>${o.sections.map((x) => `<option value="${x.from}">${esc(x.name)} only</option>`).join("")}</select></label>` : ""}
+    </div>
+    <div class="row wrap" style="margin-top:12px"><button class="btn primary" id="rc-go" disabled>Rechart</button><span class="faint" id="rc-sum"></span></div>
+    ${o.ai ? "" : `<p class="faint" style="margin-bottom:0">AI parts need one whole-song audio file, and this song's audio is split up or missing.</p>`}</div>`;
+}
+
+function wireRechart(dr, s) {
+  const o = s.rechart;
+  if (!o || o.blocked) return;
+  const go = $("#rc-go", dr), sum = $("#rc-sum", dr), picks = $$("[data-rc]", dr);
+  const sel = (inst, lv) => picks.find((p) => p.dataset.rc === inst && p.dataset.lv === lv);
+  const allow = (p, v, ok, fallback) => {
+    const opt = [...p.options].find((x) => x.value === v);
+    if (!opt) return;
+    opt.disabled = !ok;
+    if (!ok && p.value === v) p.value = fallback;
+  };
+  const onePart = () => { const x = $("#rc-section", dr); return x && x.value !== "" && Object.keys(o.parts).some((inst) => sel(inst, "expert").value === "ai") ? x.selectedOptions[0].text : ""; };
+  const changes = () => picks.flatMap((p) => {
+    const inst = p.dataset.rc, lv = p.dataset.lv, c = lv ? o.parts[inst][lv] : o.vocals;
+    if (onePart() && !lv) return [];  // vocals stay out of a one-section redo
+    if (p.value === "keep" || ((p.value === "empty" || p.value === "none") && !c.have)) return [];
+    return [`${inst}${lv ? " " + RC_LEVEL[lv] : ""}: ${rcLabel(p.value, c)}`];
+  });
+  const update = () => {
+    Object.keys(o.parts).forEach((inst) => {
+      const top = sel(inst, "expert").value;
+      o.levels.slice(1).forEach((lv) => {
+        allow(sel(inst, lv), "make", top !== "empty", "empty");
+        if (inst === "drums") allow(sel(inst, lv), "keep", top === "keep", top === "empty" ? "empty" : "make");  // cymbals and toms are shared
+      });
+    });
+    const anyAi = Object.keys(o.parts).some((inst) => sel(inst, "expert").value === "ai");
+    $("#rc-more", dr).style.display = anyAi ? "" : "none";
+    $("#rc-stylebox", dr).style.display = sel("guitar", "expert").value === "ai" ? "" : "none";
+    const n = changes().length;
+    go.disabled = !n;
+    sum.textContent = n ? `${n} change${n === 1 ? "" : "s"}` : "Nothing to change yet";
+  };
+  picks.forEach((p) => p.onchange = update);
+  if ($("#rc-section", dr)) $("#rc-section", dr).onchange = update;
+  update();
+  go.onclick = async () => {
+    const where = onePart() ? `${onePart()}: AI parts change only there, and their lower levels are rebuilt to match.\n\n` : "";
+    if (!confirm(`${where}${changes().join("\n")}\n\nEverything else stays exactly as it is. Your original chart is backed up first.`)) return;
+    const plan = { vocals: picks.find((p) => p.dataset.rc === "vocals").value };
+    Object.keys(o.parts).forEach((inst) => { plan[inst] = Object.fromEntries(o.levels.map((lv) => [lv, sel(inst, lv).value])); });
+    plan.guitar_style = $("#rc-style", dr).value;
+    const part = $("#rc-section", dr);
+    if (part && part.value !== "" && Object.keys(o.parts).some((inst) => sel(inst, "expert").value === "ai")) plan.section = Number(part.value);
+    try { await post("/api/jobs/rechart", { folder: s.folder, plan }); toast("Recharting"); closeDrawer(); location.hash = "queue"; } catch (e) { toast(e.message); }
+  };
 }
 
 async function openReview(folder, live = false) {
@@ -427,17 +505,19 @@ async function openReview(folder, live = false) {
       ${stems.map((k) =>
         `<span>${k}</span><audio controls preload="none" src="/api/audio?${qs({ folder: s.folder, stem: k })}"></audio>`).join("")}</div></div>
     ${!live || s.ours ? rateHTML(s) : ""}
+    ${owner() && s.rechart ? rechartHTML(s.rechart) : ""}
     ${owner() ? `<div class="card"><h2>${live ? "Actions" : "Next"}</h2>
       ${live ? (s.ours ? `<div class="row wrap"><button class="btn" id="unpub">Move back to staging</button></div>` : "") : `<div class="row wrap">
         <button class="btn primary" id="pub">${ICON.rocket} Publish to live</button>
         ${s.status !== "reviewed" ? `<button class="btn" id="rev">Mark reviewed</button>` : ""}
-        <button class="btn" id="rechart">Re-chart</button>
+        <button class="btn" id="rechart">Re-chart everything</button>
+        <button class="btn danger" id="remove">Delete</button>
       </div>`}
       ${local ? `<div class="row wrap" style="margin-top:10px">
         <button class="btn small" data-open-pc="clonehero">${ICON.play} Play in Clone Hero</button>
         <button class="btn small" data-open-pc="moonscraper">Open in Moonscraper</button>
         <button class="btn small" data-open-pc="folder">${ICON.folder} Folder</button></div>` : ""}
-      <p class="faint" style="margin-bottom:0">${live ? (s.ours ? "Changes here reach the Deck with the next Syncthing sync." : "Human-made charts are view-only here, so they're never changed by accident.")
+      <p class="faint" style="margin-bottom:0">${live ? (s.ours ? "Changes here reach the Deck with the next Syncthing sync." : s.rechart ? "Only the parts you pick in Rechart ever change." : "Human-made charts are view-only here, so they're never changed by accident.")
         : "Publishing moves the song into your live folder; Syncthing takes it to the Deck."}</p>
     </div>` : ""}`;
   $("#x", dr).onclick = closeDrawer;
@@ -448,6 +528,7 @@ async function openReview(folder, live = false) {
     try { await post("/api/live/unpublish", { folder: s.folder }); toast("Moved back to staging"); closeDrawer(); renderLive(); } catch (e) { toast(e.message); }
   };
   if (!live || s.ours) wireRating(dr, s);
+  if (owner()) wireRechart(dr, s);
   if (!editable) { if (owner()) wireOpenPC(dr, s); return; }
   $("#editdet", dr).onclick = () => {
     const f = (id, label, val, type = "text") => `<div><label class="field">${label}</label><input id="${id}" type="${type}" value="${esc(val || "")}"></div>`;
@@ -498,6 +579,7 @@ async function openReview(folder, live = false) {
   };
   const rev = $("#rev", dr);
   if (rev) rev.onclick = async () => { await post("/api/staging/status", { folder: s.folder, status: "reviewed" }); toast("Marked as reviewed"); openReview(folder); if (view() === "staging") renderStaging(); };
+  $("#remove", dr).onclick = () => deleteFromStaging(s.folder, s.title || s.name);
   $("#rechart", dr).onclick = async () => { await post("/api/jobs/update", { folders: [s.folder] }); toast("Re-charting with the newest models"); closeDrawer(); location.hash = "queue"; };
 }
 
@@ -605,8 +687,8 @@ function libTidy() {
     try {
       const r = await api("/api/tidy?" + qs({ folder: $("#tf").value, ...o }));
       box.innerHTML = (r.proposals.length ? `<div class="list">${r.proposals.map((p) => `
-        <label class="item check"><input type="checkbox" class="tp" value="${esc(p.path)}" ${p.note ? "disabled" : "checked"}>
-          <div class="grow"><div class="faint ellipsis">${esc(p.name)}</div><div class="ellipsis">→ ${p.ini_only ? `<span class="muted">same folder name; fixes the title/artist in song.ini</span>` : esc(p.new_name)}${p.note ? ` <span style="color:var(--warn)">(skipped: ${esc(p.note)})</span>` : ""}</div></div></label>`).join("")}</div>`
+        <label class="item check"><input type="checkbox" class="tp" value="${esc(p.path)}" ${p.note ? "disabled" : p.check ? "" : "checked"}>
+          <div class="grow"><div class="faint ellipsis">${esc(p.name)}</div><div class="ellipsis">→ ${p.ini_only ? `<span class="muted">same folder name; fixes the title/artist in song.ini</span>` : esc(p.new_name)}${p.note ? ` <span style="color:var(--warn)">(skipped: ${esc(p.note)})</span>` : ""}${p.check ? ` <span style="color:var(--warn)">(${esc(p.check)})</span>` : ""}</div></div></label>`).join("")}</div>`
         : `<div class="empty">All names are already tidy.</div>`) + `
         <div class="row" style="margin-top:12px"><button class="btn primary" id="tapply" ${r.proposals.length ? "" : "disabled"}>Tidy selected</button>
         <button class="btn" id="tundo" ${r.can_undo ? "" : "disabled"}>Undo last rename</button></div>`;

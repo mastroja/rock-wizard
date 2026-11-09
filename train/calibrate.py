@@ -25,7 +25,7 @@ def main():
     ck = torch.load(path, map_location="cuda", weights_only=False)
     kind = ck.get("kind", inst)  # feature kind the model was trained on
     model = cnn.NoteNet(kind, ck.get("hidden", 128), ck["state"]["out.weight"].shape[0], ck.get("context", False),
-                         ck.get("down", cnn.DOWN)).cuda()
+                         ck.get("down", cnn.DOWN), ck.get("layers", 0), ck.get("wide", 1)).cuda()
     model.load_state_dict(ck["state"])
     layout = data.Layout(ck.get("data", "v2"), ck.get("dm_src", "ft"))
     index = layout.index()

@@ -22,6 +22,8 @@ TOM_MARK = {2: 110, 3: 111, 4: 112}
 # follows the song's usual feel. Tuned on validation songs (train.eval_chart).
 STRAIGHT_BIAS = 0.5
 UNDECIDED = 0.3
+LEAD_IN = 3.0  # seconds of empty highway before a chart's first note
+INTRO_BPM = (60, 200)  # intro bars take the song's opening tempo, within these
 
 
 class TempoMap:
@@ -334,8 +336,59 @@ def _events(notes_by_diff, drums=False):
     return ev
 
 
+def _fine_tick(tm, t: float) -> int:
+    """A time's tick off the grid: singing doesn't sit on 16ths the way guitars do."""
+    if hasattr(tm, "raw_tick"):
+        return int(round(tm.raw_tick(t)))
+    if t < tm.lead:
+        return int(round(t / tm.lead * TPQ))
+    return TPQ + int(round((t - tm.lead) / tm.spb * TPQ))
+
+
+def _vocal_track(notes, tm) -> mido.MidiTrack:
+    """PART VOCALS from chc.vocals notes: pitched notes, a lyric on each, and phrase markers."""
+    ticks = [(_fine_tick(tm, n.start), _fine_tick(tm, n.end)) for n in notes]
+    events, phrase_end, last_b = [], None, 0
+    for i, (n, (a, b)) in enumerate(zip(notes, ticks)):
+        a = max(a, last_b)  # two notes can round onto the same tick; sung notes never overlap
+        if i + 1 < len(notes):
+            next_a = ticks[i + 1][0]
+            b = next_a if notes[i + 1].lyric == "+" else min(b, next_a)
+        b = last_b = max(b, a + 1)
+        pitch = n.pitch
+        while pitch < 36:
+            pitch += 12
+        while pitch > 84:
+            pitch -= 12
+        if n.phrase:
+            if phrase_end is not None:
+                events.append((phrase_end, 0, mido.Message("note_off", note=105, velocity=0)))
+            events.append((a, 1, mido.Message("note_on", note=105, velocity=100)))
+        phrase_end = b
+        events += [(a, 2, mido.MetaMessage("lyrics", text=n.lyric)),
+                   (a, 3, mido.Message("note_on", note=pitch, velocity=100)),
+                   (b, 0, mido.Message("note_off", note=pitch, velocity=0))]
+    events.append((phrase_end, 0, mido.Message("note_off", note=105, velocity=0)))
+    tr = mido.MidiTrack([mido.MetaMessage("track_name", name="PART VOCALS", time=0)])
+    last = 0
+    for tick, _, msg in sorted(events, key=lambda e: e[:2]):
+        tr.append(msg.copy(time=tick - last))
+        last = tick
+    tr.append(mido.MetaMessage("end_of_track", time=0))
+    return tr
+
+
+def by_difficulty(timed, tm, fn, inst) -> dict:
+    """Each level no busier than the one above it (expert, hard, medium, easy in order)."""
+    by_diff, cap = {}, None
+    for d in DIFF_BASE:
+        by_diff[d] = fn(timed, tm, d, inst, cap)
+        cap = len(by_diff[d]) if fn is drum_notes else len({n[0] for n in by_diff[d]})
+    return by_diff
+
+
 def write_mid(path: Path, bpm: float, offset: float, guitar=None, bass=None, drums=None,
-              snap: bool = True, beatmap: "BeatMap | None" = None, grid: bool = True):
+              snap: bool = True, beatmap: "BeatMap | None" = None, grid: bool = True, vocals=None):
     """Each part is a timed note list or None. Returns {part: expert note count}.
 
     grid (with a beatmap): snap every note to its bar's straight or triplet grid
@@ -370,15 +423,58 @@ def write_mid(path: Path, bpm: float, offset: float, guitar=None, bass=None, dru
                 beatmap.fit_grid([n[0] for n in timed])
             else:
                 beatmap.bar_grid = None
-        # each level no busier than the one above it (expert, hard, medium, easy in order)
-        by_diff, cap = {}, None
-        for d in DIFF_BASE:
-            by_diff[d] = fn(timed, tm, d, inst, cap)
-            cap = len(by_diff[d]) if fn is drum_notes else len({n[0] for n in by_diff[d]})
+        by_diff = by_difficulty(timed, tm, fn, inst)
         mid.tracks.append(_track(name, _events(by_diff, drums=fn is drum_notes)))
         counts[name] = len({n[0] for n in by_diff["expert"]})  # notes and chords, not lanes
+    if vocals:
+        mid.tracks.append(_vocal_track(vocals, tm))
+        counts["PART VOCALS"] = len(vocals)
     mid.save(path)
     return counts
+
+
+def add_intro(path: Path, lead: float = LEAD_IN, dry: bool = False) -> float:
+    """Add silent bars to the start of a notes.mid whose first note comes less than `lead` seconds
+    in, so players see the highway before they have to play. Returns the seconds added: the
+    audio must be delayed by exactly that much (0 if the chart already has room)."""
+    mid = mido.MidiFile(str(path), clip=True)
+    first = None
+    for tr in mid.tracks:
+        if tr.name.startswith("PART"):
+            tick = 0
+            for m in tr:
+                tick += m.time
+                if m.type == "note_on" and m.velocity:
+                    first = tick if first is None else min(first, tick)
+                    break
+    if first is None:
+        return 0.0
+    tempo_at, tick, now, tempo = 500000, 0, 0.0, 500000
+    for m in mid.tracks[0]:
+        if m.time and tick + m.time > first:
+            break
+        now += m.time / mid.ticks_per_beat * tempo / 1e6
+        tick += m.time
+        if m.type == "set_tempo":
+            tempo = tempo_at = m.tempo
+    start = now + (first - tick) / mid.ticks_per_beat * tempo / 1e6
+    if start >= lead:
+        return 0.0
+    us = mido.bpm2tempo(float(np.clip(mido.tempo2bpm(tempo_at), *INTRO_BPM)))
+    bar = 4 * us / 1e6
+    bars = int(np.ceil((lead - start) / bar))
+    if dry:
+        return bars * bar
+    shift = bars * 4 * mid.ticks_per_beat
+    for i, tr in enumerate(mid.tracks):
+        k = 0
+        while k < len(tr) - 1 and not tr[k].time and tr[k].type in ("track_name", "time_signature"):
+            k += 1
+        tr[k].time += shift
+        if i == 0:
+            tr.insert(k, mido.MetaMessage("set_tempo", tempo=us, time=0))
+    mid.save(path)
+    return bars * bar
 
 
 def write_ini(path: Path, title: str, artist: str, charter: str, length_ms: int,
@@ -395,6 +491,7 @@ def write_ini(path: Path, title: str, artist: str, charter: str, length_ms: int,
              f"charter = {charter}", f"diff_guitar = {diff('guitar')}",
              f"diff_bass = {diff('bass')}",
              f"diff_drums = {diff('drums')}",
+             f"diff_vocals = {diff('vocals')}",
              "pro_drums = True", f"song_length = {length_ms}", "delay = 0",
              f"preview_start_time = {preview_ms}",
              "chc_generated = 1"]  # marks songs this app made (chc.library.is_ours)
