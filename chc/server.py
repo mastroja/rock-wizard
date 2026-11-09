@@ -30,7 +30,7 @@ from . import feedback, library, pipeline, rechart, review, search, startup, tid
 
 ROOT = Path(__file__).resolve().parent.parent
 WEB = ROOT / "web"
-CONFIG = Path.home() / ".clone_hero_converter.json"  # shared with the earlier desktop app
+CONFIG = library.config_path()  # shared with the earlier desktop app
 PORT = 8765
 AUDIO_EXT = {".mp3", ".wav", ".flac", ".ogg", ".m4a", ".opus", ".aac", ".wma"}
 STEM_NAMES = {"bass", "drums", "other", "vocals", "guitar", "piano", "keys", "song", "crowd", "preview",

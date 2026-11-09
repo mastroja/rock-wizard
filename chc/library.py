@@ -25,6 +25,14 @@ MARKER = "chc_generated"  # song.ini key written by this app
 OUR_STEMS = ("guitar.ogg", "bass.ogg", "drums.ogg", "vocals.ogg")
 
 
+def config_path() -> Path:
+    """The app's settings file. Settings saved under the app's old name move over once."""
+    new, old = Path.home() / ".rockwizard.json", Path.home() / ".clone_hero_converter.json"
+    if old.exists() and not new.exists():
+        old.rename(new)
+    return new
+
+
 def is_ours(folder: Path) -> bool:
     ini = tidy.read_ini(folder)
     if ini.get(MARKER):

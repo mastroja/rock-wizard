@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Clone Hero Converter: drop in a song, get a Clone Hero song folder."""
+"""RockWizard: drop in a song, get a Clone Hero song folder."""
 import json
 import os
 import queue
@@ -22,7 +22,7 @@ try:
 except ImportError:  # non-Windows: previews disabled
     winsound = None
 
-CONFIG = Path.home() / ".clone_hero_converter.json"
+CONFIG = library.config_path()
 AUDIO_EXT = {".mp3", ".wav", ".flac", ".ogg", ".m4a", ".opus", ".aac", ".wma"}
 # separated stems lying around in a folder are parts of a song, not songs to convert
 STEM_NAMES = {"bass", "drums", "other", "vocals", "guitar", "piano", "keys", "song", "crowd", "preview",
@@ -73,7 +73,7 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
         self.TkdndVersion = TkinterDnD._require(self)
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("dark-blue")
-        self.title("Clone Hero Converter")
+        self.title("RockWizard")
         self.geometry("820x640")
         self.minsize(720, 580)
         self.cfg = load_config()
@@ -112,7 +112,7 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
     def show_home(self):
         self.stop_audio()
         f = ctk.CTkFrame(self, fg_color="transparent")
-        self.header(f, "Clone Hero Converter",
+        self.header(f, "RockWizard",
                     "Drop in a song and get a ready-to-play Clone Hero chart, split into "
                     "guitar, bass, drums and vocals.")
         ctk.CTkButton(f, text="⚙  Settings", width=110, height=32, fg_color=CARD,

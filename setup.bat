@@ -1,7 +1,7 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-echo === Clone Hero Converter: one-time setup ===
+echo === RockWizard: one-time setup ===
 where py >nul 2>nul
 if errorlevel 1 (
   echo Python was not found. Install it from https://www.python.org/downloads/ ^(tick "Add python.exe to PATH"^), then run this again.

@@ -1,4 +1,4 @@
-# Clone Hero Converter
+# RockWizard
 
 Drop in an MP3 or WAV and get a Clone Hero song folder: the song split into guitar, bass, drums and
 vocals, plus an automatic first-draft chart on all four difficulties.

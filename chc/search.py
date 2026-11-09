@@ -24,7 +24,7 @@ from pathlib import Path
 
 import numpy as np
 
-UA = {"User-Agent": "CloneHeroConverter/0.1 (https://github.com/mastroja/clone-hero-converter)"}
+UA = {"User-Agent": "RockWizard/0.1 (https://github.com/mastroja/rock-wizard)"}
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
