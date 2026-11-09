@@ -308,6 +308,7 @@ function wireSort(v, redraw) {
 
 // ---------- staging ----------
 let stagingFilter = "all";
+const MY_CHIP = `<span class="chip green">My chart</span>`;
 const initials = (s) => (s || "?").split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
 const coverHTML = (s, cls = "cover", w = 300) => s.has_cover
   ? `<img class="${cls}" src="/api/cover?${qs({ folder: s.folder, v: s.cover_v || 0, w })}" alt="" loading="lazy">`
@@ -319,7 +320,7 @@ async function renderStaging(reviewAll = false) {
     `${owner() ? `<button class="btn" id="fillcovers">Find missing covers</button> ` : ""}<button class="btn" id="checkall">Check all</button>`);
   $("#checkall").onclick = () => renderStaging(true);
   if (owner()) $("#fillcovers").onclick = async (e) => {
-    const missing = (S.staging ? S.staging.songs : []).filter((x) => !x.has_cover).map((x) => x.folder);
+    const missing = (S.staging ? S.staging.songs : []).filter((x) => x.ours && !x.has_cover).map((x) => x.folder);
     if (!missing.length) { toast("Every song already has a cover"); return; }
     e.target.disabled = true; e.target.textContent = `Finding ${missing.length} cover${missing.length === 1 ? "" : "s"}…`;
     try {
@@ -331,28 +332,29 @@ async function renderStaging(reviewAll = false) {
   let r;
   try { r = await api("/api/staging?" + qs({ review_all: reviewAll })); } catch (e) { $("#main").innerHTML += `<p class="chip red">${esc(e.message)}</p>`; return; }
   S.staging = r;
-  const songs = sortSongs(r.songs, sortKey("staging")).filter((s) => stagingFilter === "all" || (stagingFilter === "draft" ? s.status === "draft" : s.status === stagingFilter));
-  const counts = { all: r.songs.length, draft: r.songs.filter((s) => s.status === "draft").length, reviewed: r.songs.filter((s) => s.status === "reviewed").length };
+  const made = r.songs.filter((s) => s.ours), hand = r.songs.filter((s) => !s.ours);
+  const songs = sortSongs(stagingFilter === "mine" ? hand : made, sortKey("staging")).filter((s) => stagingFilter === "all" || stagingFilter === "mine" || s.status === stagingFilter);
+  const counts = { all: made.length, draft: made.filter((s) => s.status === "draft").length, reviewed: made.filter((s) => s.status === "reviewed").length, mine: hand.length };
   $("#main").querySelector(".empty").outerHTML = `
     <div class="row spread wrap" style="margin-bottom:14px">
-      <div class="tabs">${[["all", "All"], ["draft", "To review"], ["reviewed", "Reviewed"]].map(([k, l]) =>
+      <div class="tabs">${[["all", "All"], ["draft", "To review"], ["reviewed", "Reviewed"], ["mine", "My charts"]].map(([k, l]) =>
         `<button class="${stagingFilter === k ? "on" : ""}" data-filter="${k}">${l} <span class="faint">${counts[k]}</span></button>`).join("")}</div>
       <div class="row" style="gap:12px;min-width:0">${sortSelect("staging")}<span class="faint ellipsis">${esc(r.folder)}</span></div>
     </div>
     ${songs.length ? `<div class="songs">${songs.map((s) => {
       const v = s.verdict && VERDICT[s.verdict];
-      return `<div class="song" data-open="${esc(s.folder)}">${coverHTML(s)}
+      return `<div class="song" data-open="${esc(s.folder)}" ${s.ours ? "" : `data-hand="1"`}>${coverHTML(s)}
         <div class="meta"><div class="t ellipsis">${esc(s.title || s.name)}</div>
           <div class="faint ellipsis">${esc(s.artist || "Unknown artist")}</div>
           <div class="row wrap" style="margin-top:8px;gap:6px">
-            ${v ? `<span class="chip ${v[0]}">${v[0] === "green" ? "✓" : v[0] === "yellow" ? "!" : "✕"} ${v[0] === "green" ? "OK" : v[0] === "yellow" ? "Check" : "Problems"}</span>` : `<span class="chip">Not checked</span>`}
-            ${s.status === "reviewed" ? `<span class="chip accent">Reviewed</span>` : ""}${byChip(s)}
-            ${owner() ? `<button class="btn small danger" data-del="${esc(s.folder)}" data-title="${esc(s.title || s.name)}" style="margin-left:auto">Delete</button>` : ""}
+            ${!s.ours ? (s.mine ? MY_CHIP : `<span class="chip">Not marked yet</span>`) : v ? `<span class="chip ${v[0]}">${v[0] === "green" ? "✓" : v[0] === "yellow" ? "!" : "✕"} ${v[0] === "green" ? "OK" : v[0] === "yellow" ? "Check" : "Problems"}</span>` : `<span class="chip">Not checked</span>`}
+            ${s.status === "reviewed" && s.ours ? `<span class="chip accent">Reviewed</span>` : ""}${byChip(s)}
+            ${owner() && s.ours ? `<button class="btn small danger" data-del="${esc(s.folder)}" data-title="${esc(s.title || s.name)}" style="margin-left:auto">Delete</button>` : ""}
           </div></div></div>`;
     }).join("")}</div>` : `<div class="card empty">No songs here yet.</div>`}`;
   $$("[data-filter]").forEach((b) => b.onclick = () => { stagingFilter = b.dataset.filter; renderStaging(); });
   wireSort("staging", () => renderStaging());
-  $$("[data-open]").forEach((c) => c.onclick = () => openReview(c.dataset.open));
+  $$("[data-open]").forEach((c) => c.onclick = () => openReview(c.dataset.open, !!c.dataset.hand));
   $$("[data-del]").forEach((b) => b.onclick = (e) => { e.stopPropagation(); deleteFromStaging(b.dataset.del, b.dataset.title); });
 }
 
@@ -369,7 +371,7 @@ function rateHTML(s) {
   const parts = ["guitar", "bass", "drums", "vocals"].filter((k) => s.tiers[k] !== "-1" && (s.tiers[k] || (k !== "vocals" && s.stems.includes(k))));
   if (!parts.length) return "";
   return `<div class="card"><h2>How does it play?</h2>
-    <p class="faint" style="margin-top:0">Played it? Rate each part. The next training runs use this to see what to fix.</p>
+    <p class="faint" style="margin-top:0">Played it? Rate each part. This is used to compare models by how their charts really play.</p>
     ${parts.map((k) => `<div class="row spread rate"><span>${k}</span><div class="tabs">${RATE.map(([v, l]) =>
       `<button class="${s.ratings[k] === v ? "on" : ""}" data-rate="${k}" data-v="${v}">${l}</button>`).join("")}</div></div>`).join("")}
     <div class="row" style="margin-top:12px;gap:8px"><input id="ratenote" class="grow" placeholder="What's off? e.g. solo too sparse, chorus wrong" value="${esc(s.rating_note || "")}">
@@ -405,8 +407,9 @@ const rcSelect = (c, attrs) => `<select ${attrs}>${c.choices.map((v) => `<option
 
 function rechartHTML(o) {
   if (o.blocked) return `<div class="card"><h2>Rechart</h2><p class="faint" style="margin:0">Can't rechart this song: ${esc(o.blocked)}.</p></div>`;
-  return `<div class="card"><h2>Rechart</h2>
-    <p class="faint" style="margin-top:0">Choose what stays and what gets redone. Anything you keep stays note for note.</p>
+  return `<details class="card fold"><summary><h2>Rechart</h2></summary>
+    <p class="faint">Choose what stays and what gets redone. Anything you keep stays note for note.</p>
+    ${o.ai ? `<button class="btn small" id="rc-full">Full rechart: set everything to AI</button>` : ""}
     ${Object.entries(o.parts).map(([inst, row]) => `<div class="rc-row"><div class="rc-name">${inst}</div><div class="rc-levels">
       ${o.levels.map((lv) => `<label><span class="faint">${RC_LEVEL[lv]}</span>${rcSelect(row[lv], `data-rc="${inst}" data-lv="${lv}"`)}</label>`).join("")}</div></div>`).join("")}
     <div class="rc-row"><div class="rc-name">vocals</div><div class="rc-levels"><label><span class="faint">${o.vocals.have === "words" ? "Your lyrics" : "Part"}</span>${rcSelect(o.vocals, `data-rc="vocals"`)}</label></div></div>
@@ -415,7 +418,7 @@ function rechartHTML(o) {
       ${o.sections.length ? `<label id="rc-sectionbox"><span class="faint">Redo with AI in</span><select id="rc-section"><option value="">Whole song</option>${o.sections.map((x) => `<option value="${x.from}">${esc(x.name)} only</option>`).join("")}</select></label>` : ""}
     </div>
     <div class="row wrap" style="margin-top:12px"><button class="btn primary" id="rc-go" disabled>Rechart</button><span class="faint" id="rc-sum"></span></div>
-    ${o.ai ? "" : `<p class="faint" style="margin-bottom:0">AI parts need one whole-song audio file, and this song's audio is split up or missing.</p>`}</div>`;
+    ${o.ai ? "" : `<p class="faint" style="margin-bottom:0">AI parts need one whole-song audio file, and this song's audio is split up or missing.</p>`}</details>`;
 }
 
 function wireRechart(dr, s) {
@@ -453,6 +456,15 @@ function wireRechart(dr, s) {
   };
   picks.forEach((p) => p.onchange = update);
   if ($("#rc-section", dr)) $("#rc-section", dr).onchange = update;
+  const full = $("#rc-full", dr);
+  if (full) full.onclick = () => {
+    Object.keys(o.parts).forEach((inst) => o.levels.forEach((lv) => { sel(inst, lv).value = lv === "expert" ? "ai" : "make"; }));
+    const sung = picks.find((p) => p.dataset.rc === "vocals");
+    if ([...sung.options].some((x) => x.value === "ai")) sung.value = "ai";
+    if ($("#rc-section", dr)) $("#rc-section", dr).value = "";
+    update();
+    toast("Everything is set to AI. Press Rechart to start");
+  };
   update();
   go.onclick = async () => {
     const where = onePart() ? `${onePart()}: AI parts change only there, and their lower levels are rebuilt to match.\n\n` : "";
@@ -478,49 +490,45 @@ async function openReview(folder, live = false) {
   const v = live ? null : VERDICT[s.verdict];
   const order = { red: 0, yellow: 1, info: 2 };
   const findings = live ? [] : [...s.findings].sort((a, b) => order[a.level] - order[b.level]);
-  const editable = owner() && (!live || s.ours);  // human charts are only viewed, never changed
+  const editable = owner() && (!live || s.ours || s.mine);  // other people's charts are only viewed, never changed
+  const allClear = !findings.some((f) => f.level !== "info");
   const stems = live ? s.stems.filter((k) => !/^(preview|crowd)/i.test(k)) : ["guitar", "bass", "drums", "vocals"].filter((k) => s.stems.includes(k));
   const local = S.settings.local;
   dr.innerHTML = `
-    <div class="row spread"><span class="faint">${live ? "Quickplay" : "Review"}</span><button class="btn small" id="x">Close</button></div>
+    <div class="row spread"><span class="faint">${s.mine ? "My chart" : live ? "Quickplay" : "Review"}</span><button class="btn small" id="x">Close</button></div>
     <div class="head" style="margin:14px 0 16px">${coverHTML(s, s.has_cover ? "" : "ph cover", 0)}
       <div class="grow"><h2 style="margin:0">${esc(s.title || s.name)}</h2>
         <div class="muted">${esc(s.artist)}${s.album ? ` · ${esc(s.album)}` : ""}${s.year ? ` · ${esc(s.year)}` : ""}</div>
         <div class="row wrap" style="margin-top:8px;gap:6px">${live
-          ? (s.ours ? `<span class="chip accent">RockWizard</span>` : `<span class="chip">Human chart</span>`)
+          ? (s.ours ? `<span class="chip accent">RockWizard</span>` : s.mine ? MY_CHIP : `<span class="chip">Human chart</span>`)
           : `<span class="chip ${v[0]}">${v[1]}</span><span class="chip">${esc(s.status)}</span>`}${byChip(s)}</div>
         <div class="tiers" style="margin-top:8px">${["guitar", "bass", "drums"].map((k) => `<span>${k} <b>${esc(s.tiers[k] || "–")}</b></span>`).join("")}</div>
       </div></div>
+    ${owner() ? `<div class="card next"><h2>${live ? "Actions" : "Next"}</h2>
+      ${live ? "" : `<div class="row">
+        <button class="btn primary grow" id="pub">${ICON.rocket} Publish to live</button>
+        ${s.status !== "reviewed" ? `<button class="btn" id="rev">Mark reviewed</button>` : ""}
+      </div>`}
+      ${local ? playHTML() : ""}
+      ${s.ours ? "" : `<label class="check"><input type="checkbox" id="mine" ${s.mine ? "checked" : ""}> I charted this myself</label>`}
+      ${moreHTML(s, live, local)}
+      <p class="faint" style="margin-bottom:0">${live ? (s.ours ? "Changes here reach the Deck with the next Syncthing sync." : s.rechart ? "Only the parts you pick in Rechart ever change." : "Human-made charts are view-only here, so they're never changed by accident.")
+        : "Publishing moves the song into your live folder; Syncthing takes it to the Deck."}</p>
+    </div>` : ""}
     <div class="card"><div class="row spread"><h2 style="margin:0">Song details</h2>${editable ? `<button class="btn small" id="editdet">Edit</button>` : ""}</div>
       <div id="det" style="margin-top:10px">
         <div class="kv">${[["Title", s.title], ["Artist", s.artist], ["Album", s.album], ["Year", s.year], ["Genre", s.genre], ["Charter", s.charter]]
-          .map(([k, val]) => `<span class="faint">${k}</span><span>${esc(val || "–")}</span>`).join("")}</div></div></div>
-    ${editable ? `<div class="card"><h2>Cover art</h2>
-      <div class="row wrap"><button class="btn" id="findcover">${s.has_cover ? "Change cover" : "Find cover art"}</button>
-        <button class="btn" id="upcover">Upload image</button><input type="file" id="coverfile" accept="image/*" hidden></div>
-      <div id="covers"></div></div>` : ""}
-    ${live ? "" : `<div class="card"><h2>Checks</h2>
-      ${findings.map((f) => `<div class="finding"><span class="lv ${f.level}"></span><div>${esc(f.text)}</div></div>`).join("")}</div>`}
-    <div class="card"><h2>Listen</h2><div class="stems">
+          .map(([k, val]) => `<span class="faint">${k}</span><span>${esc(val || "–")}</span>`).join("")}</div></div>
+      ${editable ? `<div class="det-cover"><div class="row wrap"><button class="btn small" id="findcover">${s.has_cover ? "Change cover" : "Find cover art"}</button>
+        <button class="btn small" id="upcover">Upload image</button><input type="file" id="coverfile" accept="image/*" hidden></div>
+        <div id="covers"></div></div>` : ""}</div>
+    ${live ? "" : `<details class="card fold" ${allClear ? "" : "open"}><summary><h2>Checks</h2>${allClear ? ` <span class="faint">All good</span>` : ""}</summary>
+      ${findings.map((f) => `<div class="finding"><span class="lv ${f.level}"></span><div>${esc(f.text)}</div></div>`).join("")}</details>`}
+    <details class="card fold"><summary><h2>Listen</h2></summary><div class="stems">
       ${stems.map((k) =>
-        `<span>${k}</span><audio controls preload="none" src="/api/audio?${qs({ folder: s.folder, stem: k })}"></audio>`).join("")}</div></div>
+        `<span>${k}</span><audio controls preload="none" src="/api/audio?${qs({ folder: s.folder, stem: k })}"></audio>`).join("")}</div></details>
     ${!live || s.ours ? rateHTML(s) : ""}
-    ${owner() && s.rechart ? rechartHTML(s.rechart) : ""}
-    ${owner() ? `<div class="card"><h2>${live ? "Actions" : "Next"}</h2>
-      ${live ? (s.ours ? `<div class="row wrap"><button class="btn" id="unpub">Move back to staging</button></div>` : "") : `<div class="row wrap">
-        <button class="btn primary" id="pub">${ICON.rocket} Publish to live</button>
-        ${s.status !== "reviewed" ? `<button class="btn" id="rev">Mark reviewed</button>` : ""}
-        <button class="btn" id="rechart">Re-chart everything</button>
-        <button class="btn danger" id="remove">Delete</button>
-      </div>`}
-      ${local ? `<div class="row wrap" style="margin-top:10px">
-        <button class="btn small" data-open-pc="clonehero">${ICON.play} Play in Clone Hero</button>
-        <button class="btn small" data-open-pc="yarg">${ICON.play} Play in YARG</button>
-        <button class="btn small" data-open-pc="moonscraper">Open in Moonscraper</button>
-        <button class="btn small" data-open-pc="folder">${ICON.folder} Folder</button></div>` : ""}
-      <p class="faint" style="margin-bottom:0">${live ? (s.ours ? "Changes here reach the Deck with the next Syncthing sync." : s.rechart ? "Only the parts you pick in Rechart ever change." : "Human-made charts are view-only here, so they're never changed by accident.")
-        : "Publishing moves the song into your live folder; Syncthing takes it to the Deck."}</p>
-    </div>` : ""}`;
+    ${owner() && s.rechart ? rechartHTML(s.rechart) : ""}`;
   $("#x", dr).onclick = closeDrawer;
   const refreshAfter = (folder2) => { openReview(folder2, live); if (view() === "staging") renderStaging(); if (view() === "live") renderLive(); };
   const unpub = $("#unpub", dr);
@@ -530,6 +538,11 @@ async function openReview(folder, live = false) {
   };
   if (!live || s.ours) wireRating(dr, s);
   if (owner()) wireRechart(dr, s);
+  const mine = $("#mine", dr);
+  if (mine) mine.onchange = async () => {
+    try { await post("/api/song/mine", { folder: s.folder, mine: mine.checked }); refreshAfter(s.folder); }
+    catch (e) { mine.checked = !mine.checked; toast(e.message); }
+  };
   if (!editable) { if (owner()) wireOpenPC(dr, s); return; }
   $("#editdet", dr).onclick = () => {
     const f = (id, label, val, type = "text") => `<div><label class="field">${label}</label><input id="${id}" type="${type}" value="${esc(val || "")}"></div>`;
@@ -581,13 +594,33 @@ async function openReview(folder, live = false) {
   const rev = $("#rev", dr);
   if (rev) rev.onclick = async () => { await post("/api/staging/status", { folder: s.folder, status: "reviewed" }); toast("Marked as reviewed"); openReview(folder); if (view() === "staging") renderStaging(); };
   $("#remove", dr).onclick = () => deleteFromStaging(s.folder, s.title || s.name);
-  $("#rechart", dr).onclick = async () => { await post("/api/jobs/update", { folders: [s.folder] }); toast("Re-charting with the newest models"); closeDrawer(); location.hash = "queue"; };
+}
+
+const GAMES = [["yarg", "YARG"], ["clonehero", "Clone Hero"]];
+const savedGame = () => { try { return localStorage.getItem("play_game") || "yarg"; } catch (e) { return "yarg"; } };
+const playHTML = () => `<div class="play"><button class="btn" id="play">${ICON.play} Play</button>
+  <select id="game" aria-label="Game to play in">${GAMES.map(([k, l]) => `<option value="${k}" ${savedGame() === k ? "selected" : ""}>${l}</option>`).join("")}</select></div>`;
+
+function moreHTML(s, live, local) {
+  const items = [
+    live && s.ours ? `<button class="btn small" id="unpub">Move back to staging</button>` : "",
+    local ? `<button class="btn small" data-open-pc="moonscraper">Open in Moonscraper</button>` : "",
+    local ? `<button class="btn small" data-open-pc="folder">${ICON.folder} Folder</button>` : "",
+    live ? "" : `<button class="btn small danger" id="remove">Delete</button>`,
+  ].join("");
+  return items ? `<details class="more"><summary>More options</summary><div class="row wrap">${items}</div></details>` : "";
 }
 
 function wireOpenPC(dr, s) {
   $$("[data-open-pc]", dr).forEach((b) => b.onclick = async () => {
     try { await post("/api/open", { what: b.dataset.openPc, folder: s.folder }); } catch (e) { toast(e.message); }
   });
+  const play = $("#play", dr), game = $("#game", dr);
+  if (!play) return;
+  game.onchange = () => { try { localStorage.setItem("play_game", game.value); } catch (e) { /* not kept */ } };
+  play.onclick = async () => {
+    try { await post("/api/open", { what: game.value, folder: s.folder }); toast(`Opening ${game.selectedOptions[0].text}`); } catch (e) { toast(e.message); }
+  };
 }
 
 // ---------- live library (Quickplay) ----------
@@ -601,7 +634,7 @@ async function renderLive() {
   $("#main").querySelector(".empty").outerHTML = `
     <div class="row wrap" style="margin-bottom:14px;gap:10px">
       <input id="lq" type="search" class="grow" placeholder="Search ${r.songs.length} songs by title, artist or album" value="${esc(liveQuery)}" style="min-width:200px">
-      <div class="tabs">${[["all", "All"], ["ours", "RockWizard"], ["rate", "To rate"], ["human", "Human charts"], ["nocover", "No cover"]].map(([k, l]) =>
+      <div class="tabs">${[["all", "All"], ["ours", "RockWizard"], ["rate", "To rate"], ["mine", "My charts"], ["human", "Human charts"], ["nocover", "No cover"]].map(([k, l]) =>
         `<button class="${liveFilter === k ? "on" : ""}" data-lf="${k}">${l}</button>`).join("")}</div>
       ${sortSelect("live")}
     </div>
@@ -609,13 +642,13 @@ async function renderLive() {
   const draw = () => {
     const q = liveQuery.toLowerCase().trim();
     const songs = sortSongs(r.songs, sortKey("live")).filter((s) => (liveFilter === "all" || (liveFilter === "ours" ? s.ours : liveFilter === "rate" ? s.ours && !Object.keys(s.ratings || {}).length
-        : liveFilter === "human" ? !s.ours : !s.has_cover))
+        : liveFilter === "mine" ? s.mine : liveFilter === "human" ? !s.ours : !s.has_cover))
       && (!q || `${s.title} ${s.artist} ${s.album} ${s.name}`.toLowerCase().includes(q)));
     $("#livegrid").innerHTML = songs.length ? `<div class="faint" style="margin-bottom:10px">${songs.length} song${songs.length === 1 ? "" : "s"}</div>
       <div class="songs">${songs.slice(0, liveShown).map((s) => `<div class="song" data-live="${esc(s.folder)}">${coverHTML(s)}
         <div class="meta"><div class="t ellipsis">${esc(s.title || s.name)}</div>
           <div class="faint ellipsis">${esc(s.artist || "Unknown artist")}</div>
-          ${s.ours || s.added_by ? `<div class="row wrap" style="margin-top:8px;gap:6px">${s.ours ? `<span class="chip accent">RockWizard</span>` : ""}${byChip(s)}</div>` : ""}</div></div>`).join("")}</div>
+          ${s.ours || s.mine || s.added_by ? `<div class="row wrap" style="margin-top:8px;gap:6px">${s.ours ? `<span class="chip accent">RockWizard</span>` : s.mine ? MY_CHIP : ""}${byChip(s)}</div>` : ""}</div></div>`).join("")}</div>
       ${songs.length > liveShown ? `<div style="text-align:center;margin:18px 0"><button class="btn" id="more">Show more (${songs.length - liveShown} left)</button></div>` : ""}`
       : `<div class="card empty">No songs match.</div>`;
     $$("[data-live]").forEach((c) => c.onclick = () => openReview(c.dataset.live, true));

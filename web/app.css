@@ -66,7 +66,7 @@ button { font: inherit; }
 .dot.busy { background: var(--accent); box-shadow: 0 0 8px var(--accent); animation: pulse 1.2s infinite; }
 @keyframes pulse { 50% { opacity: .35; } }
 
-main { padding: 30px 38px 60px; max-width: 1080px; width: 100%; }
+main { padding: 30px 38px 60px; max-width: 1080px; width: 100%; min-width: 0; }
 .top { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 22px; }
 h1 { font-family: var(--display); font-size: 30px; margin: 0; letter-spacing: -.3px; }
 h2 { font-family: var(--display); font-size: 18px; margin: 0 0 12px; }
@@ -214,6 +214,20 @@ audio { width: 100%; height: 36px; }
 .rc-levels select:focus { outline: none; border-color: var(--accent); }
 .rc-levels label:only-child { grid-column: 1 / -1; }
 @media (max-width: 480px) { .form2 { grid-template-columns: 1fr; } .rc-levels { grid-template-columns: 1fr 1fr; } }
+.fold summary { cursor: pointer; }
+.fold summary h2 { display: inline; margin: 0; }
+.fold[open] > summary { margin-bottom: 10px; }
+.det-cover { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+.next > * + * { margin-top: 12px; }
+.next > .check { display: flex; }
+.next .btn.primary { justify-content: center; }
+.play { display: flex; }
+.play .btn { flex: 1; justify-content: center; border-radius: 10px 0 0 10px; }
+.play select { flex: none; background: var(--surface2); color: var(--text); border: 1px solid var(--border); border-left: 0;
+  border-radius: 0 10px 10px 0; padding: 0 12px; font: inherit; font-weight: 600; cursor: pointer; }
+.play select:focus { outline: none; border-color: var(--accent); }
+.more summary { color: var(--muted); font-size: 13px; cursor: pointer; }
+.more .row { margin-top: 10px; }
 
 .qr { background: white; padding: 12px; border-radius: 14px; width: 220px; }
 .qr svg { width: 100%; height: auto; display: block; }
@@ -227,7 +241,7 @@ code { background: var(--bg2); padding: 2px 6px; border-radius: 6px; border: 1px
   main { padding: 16px 16px 96px; }
   .mobile-top { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px 0; }
   .mobile-top .brand { padding: 0; }
-  .top { margin-bottom: 16px; }
+  .top { margin-bottom: 16px; flex-wrap: wrap; }
   h1 { font-size: 25px; }
   .tabbar {
     display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); position: fixed; left: 0; right: 0; bottom: 0; z-index: 20;

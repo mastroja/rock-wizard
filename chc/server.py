@@ -512,7 +512,8 @@ def song_summary(folder: Path, with_review=False) -> dict:
             "cover_v": max((int((folder / n).stat().st_mtime) for n in ("album.jpg", "album.png") if (folder / n).exists()), default=0),
             "genre": ini.get("genre", ""), "charter": ini.get("charter", ""), "added_by": ini.get("chc_added_by", ""),
             "stems": [p.stem for p in folder.iterdir() if p.suffix.lower() in (".ogg", ".opus", ".mp3")],
-            "modified": mtime, "verdict": r["verdict"] if r else None} | feedback.of(ini)
+            "modified": mtime, "verdict": r["verdict"] if r else None,
+            "mine": ini.get(library.MY_CHART, "0") not in ("", "0")} | feedback.of(ini)
 
 
 @app.get("/api/staging")
@@ -520,14 +521,17 @@ def staging_list(review_all: bool = False):
     root = staging_dir()
     if not root.exists():
         return {"folder": str(root), "songs": []}
-    songs = [song_summary(p, review_all) for p in library.song_folders(root) if library.is_ours(p)]
+    songs = []  # hand charts come along for the My charts tab; the checks are for generated charts
+    for p in library.song_folders(root):
+        ours = library.is_ours(p)
+        songs.append(song_summary(p, review_all and ours) | {"ours": ours})
     return {"folder": str(root), "songs": sorted(songs, key=lambda s: -s["modified"])}
 
 
 @app.get("/api/staging/review")
 def staging_review(folder: str):
     f = body_folder(folder)
-    return song_summary(f) | review_dict(f) | {"rechart": rechart.options(f)}
+    return song_summary(f) | review_dict(f) | {"ours": library.is_ours(f), "rechart": rechart.options(f)}
 
 
 @app.post("/api/staging/status")
@@ -629,6 +633,14 @@ def cover(folder: str, w: int = 0):
     raise HTTPException(404)
 
 
+def editable_song(path: str) -> Path:
+    """A song whose details and cover can be changed: RockWizard's, or one the owner charted."""
+    f = body_folder(path)
+    if not (library.is_ours(f) or library.is_mine(f)):
+        raise HTTPException(403, "Only your charts and songs RockWizard made can be edited here")
+    return f
+
+
 def our_song(path: str) -> Path:
     """A song folder RockWizard made: the only ones the app edits (human charts are never touched)."""
     f = body_folder(path)
@@ -639,17 +651,18 @@ def our_song(path: str) -> Path:
 
 @app.get("/api/cover/search")
 def cover_search(folder: str = "", artist: str = "", title: str = ""):
+    album = ""
     if folder:
         ini = tidy.read_ini(body_folder(folder))
-        artist, title = artist or ini.get("artist", ""), title or ini.get("name", "")
-    return {"covers": [asdict(c) for c in search.cover_candidates(artist, title)]}
+        artist, title, album = artist or ini.get("artist", ""), title or ini.get("name", ""), ini.get("album", "")
+    return {"covers": [asdict(c) for c in search.cover_candidates(artist, title, album=album)]}
 
 
 @app.post("/api/cover/set")
 async def cover_set(req: Request):
     require_owner(req)
     b = await req.json()
-    f = our_song(b["folder"])
+    f = editable_song(b["folder"])
     try:
         search.save_cover(b["url"], f)
     except Exception as e:
@@ -660,7 +673,7 @@ async def cover_set(req: Request):
 @app.post("/api/cover/upload")
 async def cover_upload(request: Request, folder: str = Form(...), file: UploadFile = File(...)):
     require_owner(request)
-    f = our_song(folder)
+    f = editable_song(folder)
     try:
         search.write_cover(await file.read(), f)
     except Exception as e:
@@ -678,7 +691,7 @@ async def cover_fill(req: Request):
         if (f / "album.jpg").exists() or (f / "album.png").exists():
             continue
         ini = tidy.read_ini(f)
-        cs = search.cover_candidates(ini.get("artist", ""), ini.get("name", ""), n=1)
+        cs = search.cover_candidates(ini.get("artist", ""), ini.get("name", ""), n=1, album=ini.get("album", ""))
         try:
             if not cs or not ini.get("artist"):
                 raise ValueError("no clear match")
@@ -706,6 +719,23 @@ def live_song(folder: str):
     return song_summary(f) | {"ours": library.is_ours(f), "rechart": rechart.options(f)}
 
 
+@app.post("/api/song/mine")
+async def song_mine(req: Request):
+    """Mark a human chart as one the owner made. Only song.ini changes, never the notes."""
+    require_owner(req)
+    b = await req.json()
+    f = body_folder(b["folder"])
+    if library.is_ours(f):
+        raise HTTPException(400, "RockWizard made this chart")
+    if not (f / "song.ini").exists():
+        raise HTTPException(400, "This song has no song.ini to mark")
+    try:
+        tidy.write_ini(f, {library.MY_CHART: 1 if b.get("mine") else 0})
+    except UnicodeDecodeError:
+        raise HTTPException(400, "This song.ini isn't in a format RockWizard can edit")
+    return {"ok": True, "mine": library.is_mine(f)}
+
+
 @app.post("/api/live/unpublish")
 async def live_unpublish(req: Request):
     """Move a RockWizard song from the live folder back to staging (Syncthing removes it from the Deck)."""
@@ -728,7 +758,7 @@ async def song_details_set(req: Request):
     (title without (…)/[…] tags, folder renamed 'Artist - Song Title')."""
     require_owner(req)
     b = await req.json()
-    f = our_song(b["folder"])
+    f = editable_song(b["folder"])
     fields = {k: str(v).strip() for k, v in (b.get("fields") or {}).items() if k in DETAIL_KEYS}
     if "name" in fields and not fields["name"]:
         raise HTTPException(400, "The song title can't be empty")

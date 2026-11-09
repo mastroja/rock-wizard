@@ -450,10 +450,11 @@ def _provenance(folder: Path, ini: dict):
 
 def options(folder: Path) -> dict | None:
     """What the Rechart panel can offer for a song, or None when the song isn't one to change here:
-    only charts made by hand in .chart form, or songs this app made or has rechart before."""
+    only charts made by hand in .chart form or marked as the owner's, or songs this app made or
+    has rechart before."""
     ini = tidy.read_ini(folder)
     is_chart = (folder / "notes.chart").exists()
-    if not is_chart and not (ini.get(MARKER) or library.is_ours(folder)):
+    if not is_chart and not (ini.get(MARKER) or library.is_ours(folder) or library.is_mine(folder)):
         return None
     if not is_chart and not (folder / "notes.mid").exists():
         return None

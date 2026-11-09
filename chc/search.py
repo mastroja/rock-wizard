@@ -262,13 +262,37 @@ class Cover:
 
 
 COVER_HOSTS = ("mzstatic.com", "coverartarchive.org", "archive.org")  # where save_cover may download from
+ALBUM_MATCH = 0.85  # how close iTunes' album and artist names must be to the song's own
 
 
-def cover_candidates(artist: str, title: str, n: int = 8) -> list[Cover]:
-    """Album covers for a song, the likeliest first: Apple's iTunes catalogue (no key needed,
-    covers almost everything) and the MusicBrainz release this app uses for album/year.
+def _album_covers(artist: str, album: str) -> list[Cover]:
+    """iTunes covers of exactly this album by this artist. A track can be missing from iTunes'
+    song search (Childish Gambino's Redbone is) while its album is there. Searches songs because
+    iTunes' album search misses albums too ("Awaken, My Love!")."""
+    if not artist or not album:
+        return []
+    try:
+        q = urllib.parse.urlencode({"term": f"{artist} {album}", "entity": "song", "limit": 25})
+        items = _json(f"https://itunes.apple.com/search?{q}").get("results", [])
+    except Exception:
+        return []
+    found = {}
+    for it in items:
+        art = it.get("artworkUrl100") or ""
+        name, by = it.get("collectionName", ""), it.get("artistName", "")
+        if art and similar(name, album) >= ALBUM_MATCH and similar(by, artist) >= ALBUM_MATCH:
+            found.setdefault((name, by), Cover(art.replace("100x100bb", "600x600bb"), art.replace("100x100bb", "200x200bb"),
+                                               name, by, (it.get("releaseDate") or "")[:4], "iTunes"))
+    return list(found.values())
+
+
+def cover_candidates(artist: str, title: str, n: int = 8, album: str = "") -> list[Cover]:
+    """Album covers for a song, the likeliest first: the album the song is known to be on, when
+    given, then Apple's iTunes catalogue (no key needed, covers almost everything) and the
+    MusicBrainz release this app uses for album/year.
     MusicBrainz is slow (rate limited, several queries), so it runs alongside and gets a few seconds."""
     from concurrent.futures import ThreadPoolExecutor, TimeoutError as Late
+    known = _album_covers(artist, album)
     pool = ThreadPoolExecutor(1)
     mb_job = pool.submit(lookup, artist, title)
     pool.shutdown(wait=False)
@@ -295,16 +319,18 @@ def cover_candidates(artist: str, title: str, n: int = 8) -> list[Cover]:
         scored.append((score, Cover(art.replace("100x100bb", "600x600bb"), art.replace("100x100bb", "200x200bb"),
                                     album, it.get("artistName", ""), (it.get("releaseDate") or "")[:4], "iTunes")))
     scored.sort(key=lambda s: -s[0])
-    out = [c for _, c in scored]
+    urls = {c.url for c in known}
+    out = known + [c for _, c in scored if c.url not in urls]
+    sure = known or (scored and scored[0][0] >= 2.0)
     try:
-        d = mb_job.result(timeout=1.5 if scored and scored[0][0] >= 2.0 else 8)  # iTunes sure: barely wait
+        d = mb_job.result(timeout=1.5 if sure else 8)  # iTunes sure: barely wait
     except Late:
         d = None
     if d and d.release_group:
         base = f"https://coverartarchive.org/release-group/{d.release_group}/front"
         mb = Cover(base + "-500", base + "-250", d.album, d.artist, d.year, "MusicBrainz")
         # MusicBrainz picks the original studio album, so it goes first when iTunes isn't sure
-        if not scored or scored[0][0] < 2.0:
+        if not sure:
             out.insert(0, mb)
         else:
             out.insert(1, mb)
