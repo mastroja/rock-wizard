@@ -10,7 +10,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import analysis, audio, chart, feedback, ml, rating, structure
+from . import analysis, audio, chart, feedback, ml, phrases, rating, structure, vocals
 
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 STEM_TO_CH = {"other": "guitar", "bass": "bass", "drums": "drums", "vocals": "vocals"}
@@ -61,7 +61,8 @@ def _separate(wav: Path, out: Path, model: str, on_progress, stop: threading.Eve
 
 
 def chart_stems(guitar_wav: Path, bass_wav: Path, drums_wav: Path, mix_wav: Path,
-                progress=lambda f: None, check=lambda: None, notes_started=lambda: None) -> dict:
+                progress=lambda f: None, check=lambda: None, notes_started=lambda: None,
+                vocal_wav: Path | None = None, artist: str = "", title: str = "") -> dict:
     """Separated stems (wav) and the full mix -> the chart's notes per part plus its tempo map.
     Shared by making a new song and updating an existing song's chart from its own stems."""
     drums_x, sr = audio.read_wav(drums_wav)
@@ -114,8 +115,16 @@ def chart_stems(guitar_wav: Path, bass_wav: Path, drums_wav: Path, mix_wav: Path
         # live or loose recordings are charted at their exact audio times instead.
         fit = chart.grid_fit([g[0] for g in gtimed] + [d[0] for d in drum_timed], bpm, offset)
         snap = fit < 0.15
+    check()
+    progress(0.9)
+    sung = []
+    if vocal_wav is not None and vocals.available():
+        try:
+            sung = vocals.chart(*audio.read_wav(vocal_wav), artist, title)
+        except Exception as e:  # a song without a vocal track still beats no song
+            print(f"vocal chart failed: {e}", file=sys.stderr)
     progress(1.0)
-    return {"guitar": gtimed, "bass": btimed, "drums": drum_timed, "beatmap": beatmap,
+    return {"guitar": gtimed, "bass": btimed, "drums": drum_timed, "vocals": sung, "beatmap": beatmap,
             "bpm": bpm, "offset": offset, "snap": snap}
 
 
@@ -123,12 +132,18 @@ def write_chart(song_dir: Path, c: dict, title: str, artist: str, charter: str, 
                 details=None, preview_ms: int | None = None) -> dict:
     """notes.mid and song.ini (with difficulty ratings and song details) for chart_stems' result."""
     counts = chart.write_mid(song_dir / "notes.mid", c["bpm"], c["offset"], guitar=c["guitar"],
-                             bass=c["bass"], drums=c["drums"], snap=c["snap"], beatmap=c["beatmap"])
+                             bass=c["bass"], drums=c["drums"], snap=c["snap"], beatmap=c["beatmap"],
+                             vocals=c["vocals"])
+    c["lead"] = chart.add_intro(song_dir / "notes.mid")  # the caller delays the audio to match
+    phrases.add_to_mid(song_dir / "notes.mid")
+    length += c["lead"]
     d = details
     # each instrument's difficulty tier for the song list, judged from its Expert chart
     tiers = {k: rating.tier(k, c[k]) for k in ("guitar", "bass", "drums") if c[k]}
     if preview_ms is None:
         preview_ms = int(min(30, max(0, length - 40)) * 1000)
+    else:
+        preview_ms += int(c["lead"] * 1000)
     models = " ".join(f"{k}:{ml.model_tag(k)}" for k in ("guitar", "bass", "drums") if c[k] and ml.available(k))
     chart.write_ini(song_dir / "song.ini", title, artist, charter, int(length * 1000), counts,
                     preview_ms=preview_ms, album=d.album if d else "", genre=d.genre if d else "",
@@ -170,9 +185,11 @@ def update_song(song_dir: Path, on_step=lambda i: None, on_progress=lambda frac:
         on_step(1)
         on_progress(0.15)
         c = chart_stems(wavs["guitar"], wavs["bass"], wavs["drums"], work / "mix.wav",
-                        lambda f: on_progress(0.15 + 0.8 * f), check, lambda: on_step(2))
+                        lambda f: on_progress(0.15 + 0.8 * f), check, lambda: on_step(2),
+                        wavs["vocals"], ini.get("artist", ""), ini.get("name", ""))
         check()
-        saved = library.backup(song_dir, "before chart update", files=["notes.mid", "song.ini"])
+        audio.ensure_writable(song_dir / name for name in library.OUR_STEMS)
+        saved = library.backup(song_dir, "before chart update", files=["notes.mid", "song.ini", *library.OUR_STEMS])
         d = Details(ini.get("name", ""), ini.get("artist", ""), ini.get("album", ""),
                     ini.get("year", ""), ini.get("genre", ""))
         try:
@@ -185,10 +202,39 @@ def update_song(song_dir: Path, on_step=lambda i: None, on_progress=lambda frac:
         # except ratings: they were about the old chart (data/feedback.jsonl keeps them)
         new = library.tidy.read_ini(song_dir)
         library.tidy.write_ini(song_dir, {k: v for k, v in ini.items() if k not in new and not feedback.is_rating_key(k)})
+        if c["lead"]:
+            for name in library.OUR_STEMS:
+                audio.add_lead(song_dir / name, c["lead"])
         on_progress(1.0)
         return saved
     finally:
         shutil.rmtree(work, ignore_errors=True)
+
+
+def add_intro(song_dir: Path, dry: bool = False) -> float:
+    """Give a chart this app already made its intro bars, without re-charting it: silent bars in
+    notes.mid and the same silence on its stems. Returns the seconds added."""
+    from . import library
+    if not library.is_ours(song_dir):
+        raise ValueError(f"{song_dir.name} was not made by this app, so it is left alone")
+    mid = song_dir / "notes.mid"
+    lead = chart.add_intro(mid, dry=True)
+    if dry or not lead:
+        return lead
+    audio.ensure_writable(song_dir / name for name in library.OUR_STEMS)
+    library.backup(song_dir, "before intro bars", files=["notes.mid", "song.ini", *library.OUR_STEMS])
+    for name in library.OUR_STEMS:
+        audio.add_lead(song_dir / name, lead)
+    chart.add_intro(mid)
+    ini = library.tidy.read_ini(song_dir)
+    fields = {}
+    for key, add in (("song_length", int(lead * 1000)), ("preview_start_time", int(lead * 1000))):
+        try:
+            fields[key] = int(float(ini.get(key, ""))) + add
+        except ValueError:
+            pass
+    library.tidy.write_ini(song_dir, fields)
+    return lead
 
 
 def make_song(src: Path, artist: str, title: str, songs_dir: Path, charter: str = "",
@@ -227,7 +273,8 @@ def make_song(src: Path, artist: str, title: str, songs_dir: Path, charter: str 
 
         on_step(2); on_progress(0.72)
         c = chart_stems(guitar_wav, preview_dir / "bass.wav", preview_dir / "drums.wav", wav,
-                        lambda f: on_progress(0.72 + 0.21 * f), check, lambda: on_step(3))
+                        lambda f: on_progress(0.72 + 0.21 * f), check, lambda: on_step(3),
+                        preview_dir / "vocals.wav", artist, title)
         check()
 
         on_step(4); on_progress(0.93)
@@ -240,7 +287,7 @@ def make_song(src: Path, artist: str, title: str, songs_dir: Path, charter: str 
         if cover is not None and Path(cover).exists():
             shutil.copy(cover, song_dir / "album.jpg")
         for demucs_name, ch_name in STEM_TO_CH.items():
-            audio.to_ogg(preview_dir / f"{demucs_name}.wav", song_dir / f"{ch_name}.ogg")
+            audio.to_ogg(preview_dir / f"{demucs_name}.wav", song_dir / f"{ch_name}.ogg", c["lead"])
             check()
         on_progress(1.0)
         stems = {"Guitar & everything else": preview_dir / "other.wav",

@@ -106,6 +106,25 @@ def song_profile(f: np.ndarray) -> np.ndarray:
     return np.concatenate([f.mean(0), np.percentile(f, 90, axis=0)]).astype(np.float32)
 
 
+def transpose(f: np.ndarray, kind: str, semitones: int) -> np.ndarray:
+    """Normalised features as if the song were played `semitones` higher (training augmentation:
+    a chart barely changes with the key, so each song teaches the model several times over)."""
+    out, at = [], 0
+    for _, bins, lo, hi in parts(kind):
+        part = f[:, at:at + bins]
+        at += bins
+        n = int(round(semitones * (bins + 1) / (12 * np.log2(hi / lo))))
+        moved = np.full_like(part, part.min())  # the bins nothing moves into stay silent
+        if n > 0:
+            moved[:, n:] = part[:, :-n]
+        elif n < 0:
+            moved[:, :n] = part[:, -n:]
+        else:
+            moved = part
+        out.append(moved)
+    return np.concatenate(out, axis=1)
+
+
 def normalize(f: np.ndarray) -> np.ndarray:
     """Per-song standardisation so quiet and loud mixes look alike."""
     f = f.astype(np.float32)

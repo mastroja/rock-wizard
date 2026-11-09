@@ -32,12 +32,12 @@ class Bank:
     """Memory-mapped features plus lazily built targets for a set of songs."""
 
     def __init__(self, kind, items, path, n_out=None, context=False, focus=1.0, solo_frac=0.0,
-                 onset=False):
+                 onset=False, pitch_aug=0):
         """path(i, song, kind) -> feature file. focus: loss weight for frames in fast runs and
         guitar solos; solo_frac: share of windows placed in a solo; onset: last output is a
-        lane-free note start."""
+        lane-free note start; pitch_aug: transpose windows by up to this many semitones."""
         self.kind, self.items = kind, items
-        self.focus, self.solo_frac, self.onset = focus, solo_frac, onset
+        self.focus, self.solo_frac, self.onset, self.pitch_aug = focus, solo_frac, onset, pitch_aug
         self.solos = {}  # guitar solo sections (seconds) per song, from the chart's solo markers
         self.n_ch = n_out or len(cnn.CHANNELS[kind])
         self.n_lanes = cnn.n_lanes(kind)
@@ -92,6 +92,8 @@ class Bank:
         x = np.asarray(f[a:a + WIN], dtype=np.float32)
         m, sd = self.stats[i]
         x = (x - m) / sd
+        if self.pitch_aug:
+            x = features.transpose(x, self.kind, int(rng.integers(-self.pitch_aug, self.pitch_aug + 1)))
         t0, t1 = a / features.FPS, (a + len(x)) / features.FPS
         ev = [(t - t0, c) for t, c in self.evs[i] if _in(t, t0, t1)]
         y = np.zeros((len(x), self.n_ch), np.float32)
@@ -237,6 +239,10 @@ def main():
                     help="the recurrent layer runs at 1/down of the frame rate (smaller = finer timing)")
     ap.add_argument("--context", action="store_true",
                     help="also give the model the whole song's feature profile (its pitch range)")
+    ap.add_argument("--layers", type=int, default=0, help="self-attention layers after the recurrent one")
+    ap.add_argument("--wide", type=int, default=1, help="multiplies the convolution filters")
+    ap.add_argument("--pitch-aug", type=int, default=0, help="transpose training windows by up to this many semitones")
+    ap.add_argument("--lr", type=float, default=2e-3)
     ap.add_argument("--save-every", type=int, default=1000,
                     help="steps between resumable snapshots (also taken when paused)")
     args = ap.parse_args()
@@ -275,21 +281,21 @@ def main():
     banks, weights = [], []
     if train_items:
         banks.append(Bank(args.kind, train_items, layout.clean, n_out, args.context, args.focus,
-                          args.solo_frac, args.onset))
+                          args.solo_frac, args.onset, args.pitch_aug))
         weights.append(1 - args.dm_frac if dm_items else 1.0)
     if dm_items and args.dm_frac > 0:
         banks.append(Bank(args.kind, dm_items, layout.dm, n_out, args.context, args.focus,
-                          args.solo_frac, args.onset))
+                          args.solo_frac, args.onset, args.pitch_aug))
         weights.append(args.dm_frac if train_items else 1.0)
     weights = np.array(weights) / sum(weights)
     rng = np.random.default_rng(0)
     if args.focus != 1.0 or args.solo_frac:
         print(f"solo sections in {sum(len(b.solo_items) for b in banks)} training songs", flush=True)
-    model = cnn.NoteNet(args.kind, args.hidden, n_out, args.context, args.down).to(device)
+    model = cnn.NoteNet(args.kind, args.hidden, n_out, args.context, args.down, args.layers, args.wide).to(device)
     n_l = cnn.n_lanes(args.kind)
     print("params", sum(p.numel() for p in model.parameters()), flush=True)
-    opt = torch.optim.AdamW(model.parameters(), lr=2e-3, weight_decay=1e-2)
-    sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=2e-3, total_steps=args.steps, pct_start=0.1)
+    opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-2)
+    sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=args.lr, total_steps=args.steps, pct_start=0.1)
     pw = torch.full((n_out,), 6.0, device=device)
     if n_out > n_l:
         pw[n_l], pw[n_l + 1] = 3.0, 1.0  # hammer-on flags are sparse; sustain spans are not
@@ -308,7 +314,8 @@ def main():
         torch.save({"state": model.state_dict(), "kind": args.kind, "thr": thr, "hidden": args.hidden,
                     "n_out": n_out, "data": args.data, "dm_src": args.dm_src, "rel": args.rel,
                     "context": args.context, "size": args.size, "onset": args.onset, "down": args.down,
-                    "focus": args.focus, "solo_frac": args.solo_frac}, out)
+                    "focus": args.focus, "solo_frac": args.solo_frac, "layers": args.layers, "wide": args.wide,
+                    "win": args.win, "pitch_aug": args.pitch_aug}, out)
 
     # resumable snapshot: everything needed to carry on exactly where training stopped
     snap = out.with_name(out.stem + ".resume.pt")

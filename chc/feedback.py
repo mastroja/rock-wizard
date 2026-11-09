@@ -11,7 +11,7 @@ from pathlib import Path
 from . import tidy
 
 LOG = Path(__file__).resolve().parent.parent / "data" / "feedback.jsonl"
-INSTRUMENTS = ("guitar", "bass", "drums")
+INSTRUMENTS = ("guitar", "bass", "drums", "vocals")
 RATINGS = ("good", "ok", "bad")
 NOTE_KEY, BY_KEY = "chc_rating_note", "chc_rated_by"
 

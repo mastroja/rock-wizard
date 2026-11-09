@@ -12,4 +12,6 @@ uvicorn
 python-multipart
 qrcode
 pywebview
+torchcrepe
+openai-whisper
 # torch/torchaudio are installed first, and basic-pitch (model file only) last, by setup.bat

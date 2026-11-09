@@ -44,32 +44,40 @@ def n_lanes(kind: str) -> int:
 
 class NoteNet(nn.Module):
     def __init__(self, kind: str, hidden: int = 128, n_out: int | None = None, context: bool = False,
-                 down: int = DOWN):
+                 down: int = DOWN, layers: int = 0, wide: int = 1):
         """context: also take the whole song's feature profile (features.song_profile) next to
         every window, so the model knows where the music sits in the song's range.
-        down: the recurrent layer runs at 1/down of the frame rate."""
+        down: the recurrent layer runs at 1/down of the frame rate.
+        layers: self-attention layers after the recurrent one, so any moment can look at similar
+        moments anywhere in the window (the same riff earlier in the song), however far away.
+        wide: multiplies the convolution filters."""
         super().__init__()
         self.kind = kind
         self.down = down
+        self.layers = layers
         self.n_out = n_out or len(CHANNELS[kind])
         self.context = context
         n_bins = features.n_bins(kind)
         self.in_ch = features.channels(kind)  # stacked signals (stereo guitar: mid, side, keys)
-        ch = [self.in_ch, 16, 32, 48]
+        ch = [self.in_ch, 16 * wide, 32 * wide, 48 * wide]
         pools = [3, 3, 2]
-        layers, f = [], n_bins
+        blocks, f = [], n_bins
         for i in range(3):
-            layers += [nn.Conv2d(ch[i], ch[i + 1], 3, padding=1), nn.BatchNorm2d(ch[i + 1]), nn.ReLU(),
+            blocks += [nn.Conv2d(ch[i], ch[i + 1], 3, padding=1), nn.BatchNorm2d(ch[i + 1]), nn.ReLU(),
                        nn.Conv2d(ch[i + 1], ch[i + 1], 3, padding=1), nn.BatchNorm2d(ch[i + 1]), nn.ReLU(),
                        nn.MaxPool2d((1, pools[i]))]
             f //= pools[i]
-        self.conv = nn.Sequential(*layers)
-        self.proj = nn.Sequential(nn.Linear(ch[-1] * f, 256), nn.ReLU(), nn.Dropout(0.2))
-        width = 256
+        self.conv = nn.Sequential(*blocks)
+        width = 128 * (wide + 1)
+        self.proj = nn.Sequential(nn.Linear(ch[-1] * f, width), nn.ReLU(), nn.Dropout(0.2))
         if context:
             self.ctx = nn.Sequential(nn.Linear(2 * n_bins * self.in_ch, 64), nn.ReLU())
             width += 64
         self.rnn = nn.GRU(width, hidden, num_layers=2, batch_first=True, bidirectional=True, dropout=0.2)
+        if layers:
+            one = nn.TransformerEncoderLayer(2 * hidden, 8, 4 * hidden, dropout=0.1, activation="gelu",
+                                             batch_first=True, norm_first=True)
+            self.attn = nn.TransformerEncoder(one, layers, norm=nn.LayerNorm(2 * hidden), enable_nested_tensor=False)
         self.out = nn.Linear(2 * hidden + width, self.n_out)
 
     def forward(self, x, profile=None):  # x: (B, T, F) normalised features; profile: (B, 2F)
@@ -89,6 +97,8 @@ class NoteNet(nn.Module):
         hp = nn.functional.pad(h, (0, 0, 0, pad))
         ctx = nn.functional.avg_pool1d(hp.transpose(1, 2), self.down).transpose(1, 2)
         ctx, _ = self.rnn(ctx)                             # long-range context at 1/down rate
+        if self.layers:
+            ctx = self.attn(ctx)
         ctx = ctx.repeat_interleave(self.down, dim=1)[:, :T]
         return self.out(torch.cat([ctx, h], dim=-1))       # logits (B, T, n_out)
 
@@ -97,6 +107,8 @@ class NoteNet(nn.Module):
 def predict(model: NoteNet, feats: np.ndarray, device="cuda", chunk=4096, pad=256) -> np.ndarray:
     """Probabilities (T, n_out) for a whole song, processed in overlapping chunks."""
     model.eval()
+    if model.layers:  # a chunk's edges should see as far as its middle does
+        pad = 1024
     xn = features.normalize(feats)
     x = torch.from_numpy(xn).to(device)
     prof = torch.from_numpy(features.song_profile(xn))[None].to(device) if model.context else None

@@ -26,7 +26,7 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import feedback, library, pipeline, review, search, startup, tidy
+from . import feedback, library, pipeline, rechart, review, search, startup, tidy
 
 ROOT = Path(__file__).resolve().parent.parent
 WEB = ROOT / "web"
@@ -171,6 +171,13 @@ def run_update(j: Job, stop: threading.Event):
     j.result = {"folder": str(folder), "backup": str(saved), "verdict": rep.verdict}
 
 
+def run_rechart(j: Job, stop: threading.Event):
+    folder = Path(j.args["folder"])
+    saved = rechart.run(folder, j.args["plan"], on_step=lambda i: setattr(j, "step", i),
+                        on_progress=lambda f: setattr(j, "progress", f), stop=stop)
+    j.result = {"folder": str(folder), "backup": str(saved)}
+
+
 def worker():
     while True:
         jid = job_queue.get()
@@ -179,7 +186,7 @@ def worker():
             continue
         j.status = "running"
         try:
-            (run_convert if j.kind == "convert" else run_update)(j, stops[jid])
+            {"convert": run_convert, "update": run_update, "rechart": run_rechart}[j.kind](j, stops[jid])
             j.status, j.progress, j.step = "done", 1.0, len(j.steps)
         except pipeline.Cancelled:
             j.status = "cancelled"
@@ -401,6 +408,26 @@ async def job_update(req: Request):
     return out
 
 
+@app.post("/api/jobs/rechart")
+async def job_rechart(req: Request):
+    """Keep or redo a song part by part. Asked for per song, with the person's choices."""
+    require_owner(req)
+    b = await req.json()
+    f = body_folder(b["folder"]).resolve()
+    if not any(r.resolve() in f.parents for r in (staging_dir(), live_dir()) if r):
+        raise HTTPException(400, "Only songs in staging or Quickplay can be recharted")
+    opts = rechart.options(f)
+    if opts is None or "blocked" in opts:
+        raise HTTPException(400, (opts or {}).get("blocked") or "This song can't be recharted here")
+    if any(j.status in ("queued", "running") and j.args.get("folder") == str(f) for j in jobs.values()):
+        raise HTTPException(409, "This song already has a job running")
+    try:
+        plan = rechart.check_plan(b.get("plan") or {}, opts)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return public(add_job("rechart", f.name, rechart.STEPS, folder=str(f), plan=plan))
+
+
 @app.post("/api/jobs/{jid}/cancel")
 def job_cancel(jid: str, request: Request):
     j = jobs.get(jid)
@@ -480,7 +507,7 @@ def song_summary(folder: Path, with_review=False) -> dict:
         r = review_dict(folder)
     return {"folder": str(folder), "name": folder.name, "artist": ini.get("artist", ""), "title": ini.get("name", ""),
             "album": ini.get("album", ""), "year": ini.get("year", ""), "status": review.status(folder),
-            "tiers": {k: ini.get(f"diff_{k}", "") for k in ("guitar", "bass", "drums")},
+            "tiers": {k: ini.get(f"diff_{k}", "") for k in ("guitar", "bass", "drums", "vocals")},
             "has_cover": (folder / "album.jpg").exists() or (folder / "album.png").exists(),
             "cover_v": max((int((folder / n).stat().st_mtime) for n in ("album.jpg", "album.png") if (folder / n).exists()), default=0),
             "genre": ini.get("genre", ""), "charter": ini.get("charter", ""), "added_by": ini.get("chc_added_by", ""),
@@ -500,7 +527,7 @@ def staging_list(review_all: bool = False):
 @app.get("/api/staging/review")
 def staging_review(folder: str):
     f = body_folder(folder)
-    return song_summary(f) | review_dict(f)
+    return song_summary(f) | review_dict(f) | {"rechart": rechart.options(f)}
 
 
 @app.post("/api/staging/status")
@@ -519,6 +546,21 @@ async def staging_publish(req: Request):
         raise HTTPException(400, "Set the live folder (Quickplay) in Settings first")
     ok, msg, dest = review.publish(body_folder(b["folder"]), live_dir(), bool(b.get("force")))
     return {"ok": ok, "message": msg, "folder": str(dest) if dest else None}
+
+
+@app.post("/api/staging/remove")
+async def staging_remove(req: Request):
+    """Send a staging song to the Recycle Bin. Only RockWizard's own songs inside staging qualify."""
+    require_owner(req)
+    f = our_song((await req.json())["folder"])
+    if staging_dir().resolve() not in f.resolve().parents:
+        raise HTTPException(403, "Only songs in staging can be removed here")
+    if any(j.status in ("queued", "running") and j.args.get("folder") == str(f) for j in jobs.values()):
+        raise HTTPException(409, "This song is being re-charted. Cancel that first")
+    n, errs = library.recycle([f])
+    if not n:
+        raise HTTPException(500, errs[0])
+    return {"ok": True}
 
 
 @app.post("/api/open")
@@ -657,7 +699,7 @@ def live_list():
 @app.get("/api/live/song")
 def live_song(folder: str):
     f = body_folder(folder)
-    return song_summary(f) | {"ours": library.is_ours(f)}
+    return song_summary(f) | {"ours": library.is_ours(f), "rechart": rechart.options(f)}
 
 
 @app.post("/api/live/unpublish")
@@ -756,7 +798,7 @@ def tidy_scan(request: Request, folder: str, parens: bool = True, brackets: bool
     props = tidy.scan(root, parens, brackets, ini, caps, artist_map() if caps else None)
     return {"folder": str(root), "can_undo": tidy.can_undo(root),
             "proposals": [{"path": str(p.path), "name": p.path.name, "new_name": p.new_name, "note": p.note,
-                           "ini_only": p.ini_only} for p in props]}
+                           "ini_only": p.ini_only, "check": p.check} for p in props]}
 
 
 @app.post("/api/tidy/apply")

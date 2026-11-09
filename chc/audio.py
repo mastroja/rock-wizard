@@ -1,5 +1,6 @@
 """Audio helpers: bundled ffmpeg, conversion to wav, wav reading."""
 import subprocess
+import time
 import wave
 from pathlib import Path
 
@@ -26,10 +27,36 @@ def to_wav(src: Path, dest: Path) -> Path:
     return dest
 
 
-def to_ogg(wav: Path, dest: Path) -> Path:
-    _run([ffmpeg_exe(), "-y", "-loglevel", "error", "-i", str(wav),
+def to_ogg(wav: Path, dest: Path, lead: float = 0.0) -> Path:
+    """Encode to ogg, with `lead` seconds of silence added at the start."""
+    delay = ["-af", f"adelay={int(round(lead * 1000))}:all=1"] if lead else []
+    _run([ffmpeg_exe(), "-y", "-loglevel", "error", "-i", str(wav), *delay,
           "-c:a", "libvorbis", "-q:a", "6", str(dest)])
     return dest
+
+
+def add_lead(ogg: Path, lead: float) -> None:
+    """Add `lead` seconds of silence to the start of an ogg, in place."""
+    tmp = ogg.with_name(ogg.stem + ".part.ogg")
+    to_ogg(ogg, tmp, lead)
+    for wait in (0.5, 1, 2):  # Syncthing can hold a file for a moment
+        try:
+            return tmp.replace(ogg)
+        except PermissionError:
+            time.sleep(wait)
+    tmp.replace(ogg)
+
+
+def ensure_writable(paths) -> None:
+    """Stop before anything changes if a game has one of these files open."""
+    for p in map(Path, paths):
+        try:  # renaming needs the same access replacing the file does; opening it isn't enough
+            probe = p.with_name(p.name + ".probe")
+            p.rename(probe)
+            probe.rename(p)
+        except PermissionError:
+            raise RuntimeError(f"{Path(p).name} is open in another program. Close the game or "
+                               "leave this song, then try again") from None
 
 
 def read_wav(path: Path) -> tuple[np.ndarray, int]:
