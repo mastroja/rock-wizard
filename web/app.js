@@ -134,6 +134,11 @@ function renderCreate() {
       </div>
       <div id="results"></div>
     </div>
+    <div class="card">
+      <div class="row spread"><h2 style="margin:0">Suggested songs</h2><button class="btn small" id="sgmore">Shuffle</button></div>
+      <p class="faint" style="margin:4px 0 12px">Picked by hand for how they should play. Anything already in your library is left out.</p>
+      <div id="suggest"><div class="empty"><span class="spinner"></span></div></div>
+    </div>
     <div class="card desktop-only" id="batchcard">
       <div class="row spread wrap">
         <div><h2 style="margin:0">Convert a whole folder</h2><div class="faint">Every song in a folder, one after another.</div></div>
@@ -152,6 +157,37 @@ function renderCreate() {
   $("#q").onkeydown = (e) => { if (e.key === "Enter") doSearch(); };
   if (!desk()) $("#batchcard").classList.add("hidden");  // needs the desktop window's folder picker
   $("#pickbatch").onclick = pickBatch;
+  loadSuggestions();
+}
+
+let suggestGroup = "All";
+async function loadSuggestions() {
+  const box = $("#suggest");
+  let songs;
+  try { songs = (await api("/api/suggestions")).songs; } catch (e) { box.innerHTML = `<p class="chip red">${esc(e.message)}</p>`; return; }
+  if (!box.isConnected) return;  // left the page while it loaded
+  const groups = ["All", ...new Set(songs.map((s) => s.group))];
+  if (!groups.includes(suggestGroup)) suggestGroup = "All";
+  box.innerHTML = `<div class="tabs" style="margin-bottom:10px">${groups.map((g) => `<button data-sg="${esc(g)}">${esc(g)}</button>`).join("")}</div><div id="sglist"></div>`;
+  const draw = () => {
+    $$("[data-sg]", box).forEach((b) => b.classList.toggle("on", b.dataset.sg === suggestGroup));
+    const pool = songs.filter((s) => suggestGroup === "All" || s.group === suggestGroup);
+    const shown = [], artists = new Set();
+    for (const s of [...pool].sort(() => Math.random() - 0.5)) {  // one song per artist each time
+      if (shown.length < 8 && !artists.has(s.artist)) { artists.add(s.artist); shown.push(s); }
+    }
+    $("#sglist", box).innerHTML = shown.map((s, i) => `<div class="result"><div class="grow"><div class="ellipsis"><b>${esc(s.artist)} – ${esc(s.title)}</b></div>
+      <div class="faint ellipsis">${esc(s.why)}</div></div><button class="btn small" data-find="${i}">Find it</button></div>`).join("") || `<p class="faint">You already have every song in this group.</p>`;
+    $$("[data-find]", box).forEach((b) => b.onclick = () => {
+      const s = shown[b.dataset.find];
+      $("#q").value = `${s.artist} - ${s.title}`;
+      $("#q").scrollIntoView({ behavior: "smooth", block: "center" });
+      doSearch();
+    });
+  };
+  $$("[data-sg]", box).forEach((b) => b.onclick = () => { suggestGroup = b.dataset.sg; draw(); });
+  $("#sgmore").onclick = draw;
+  draw();
 }
 
 function pending(f) {
@@ -367,13 +403,23 @@ function closeDrawer() { $$(".scrim, .drawer").forEach((e) => e.remove()); }
 
 // how a chart plays, rated per part after playing it (friends too); the training runs read these
 const RATE = [["good", "Good"], ["ok", "OK"], ["bad", "Bad"]];
+const ISSUE_TEXT = { notes: ["Too many notes", "Too few notes"], chords: ["Too many chords", "Too few chords"],
+  sustains: ["Holds too long", "Holds too short"], hopos: ["Too many hammer-ons", "Too few hammer-ons"] };
+const flagged = (s, k) => s.ratings[k] === "ok" || s.ratings[k] === "bad";  // tags are for parts with something wrong
+function issuesHTML(s, k) {
+  const opts = owner() && s.issue_options[k];
+  if (!opts) return "";
+  return `<div class="issues ${flagged(s, k) ? "" : "hidden"}" data-issues="${k}">${opts.flatMap((i) => ["+", "-"].map((sg, n) =>
+    `<button class="issue ${s.issues[k].includes(i + sg) ? "on" : ""}" data-issue="${i + sg}" data-inst="${k}">${ISSUE_TEXT[i][n]}</button>`)).join("")}</div>`;
+}
+
 function rateHTML(s) {
   const parts = ["guitar", "bass", "drums", "vocals"].filter((k) => s.tiers[k] !== "-1" && (s.tiers[k] || (k !== "vocals" && s.stems.includes(k))));
   if (!parts.length) return "";
   return `<div class="card"><h2>How does it play?</h2>
-    <p class="faint" style="margin-top:0">Played it? Rate each part. This is used to compare models by how their charts really play.</p>
+    <p class="faint" style="margin-top:0">Played it? Rate each part. If something's off, tap what. Once two charts agree, new charts adjust.</p>
     ${parts.map((k) => `<div class="row spread rate"><span>${k}</span><div class="tabs">${RATE.map(([v, l]) =>
-      `<button class="${s.ratings[k] === v ? "on" : ""}" data-rate="${k}" data-v="${v}">${l}</button>`).join("")}</div></div>`).join("")}
+      `<button class="${s.ratings[k] === v ? "on" : ""}" data-rate="${k}" data-v="${v}">${l}</button>`).join("")}</div></div>${issuesHTML(s, k)}`).join("")}
     <div class="row" style="margin-top:12px;gap:8px"><input id="ratenote" class="grow" placeholder="What's off? e.g. solo too sparse, chorus wrong" value="${esc(s.rating_note || "")}">
       <button class="btn small" id="savenote">Save</button></div>
     <div class="faint" id="ratedby" style="margin-top:6px">${s.rated_by ? `Last rated by ${esc(s.rated_by)}` : ""}</div></div>`;
@@ -382,10 +428,17 @@ function rateHTML(s) {
 function wireRating(dr, s) {
   const send = async (body) => {
     const r = await post("/api/song/rating", { folder: s.folder, ...body });
-    Object.assign(s, { ratings: r.ratings, rating_note: r.rating_note, rated_by: r.rated_by });
+    Object.assign(s, { ratings: r.ratings, issues: r.issues, rating_note: r.rating_note, rated_by: r.rated_by });
     $$("[data-rate]", dr).forEach((b) => b.classList.toggle("on", s.ratings[b.dataset.rate] === b.dataset.v));
+    $$("[data-issues]", dr).forEach((b) => b.classList.toggle("hidden", !flagged(s, b.dataset.issues)));
+    $$("[data-issue]", dr).forEach((b) => b.classList.toggle("on", s.issues[b.dataset.inst].includes(b.dataset.issue)));
     $("#ratedby", dr).textContent = s.rated_by ? `Last rated by ${s.rated_by}` : "";
   };
+  $$("[data-issue]", dr).forEach((b) => b.onclick = async () => {
+    const k = b.dataset.inst, t = b.dataset.issue, had = s.issues[k].includes(t);
+    const tags = s.issues[k].filter((x) => x.slice(0, -1) !== t.slice(0, -1)).concat(had ? [] : [t]);  // one direction per issue
+    try { await send({ inst: k, tags }); } catch (e) { toast(e.message); }
+  });
   $$("[data-rate]", dr).forEach((b) => b.onclick = async () => {
     const k = b.dataset.rate, v = s.ratings[k] === b.dataset.v ? "" : b.dataset.v;  // tap again to clear
     try { await send({ inst: k, rating: v }); toast(v ? `${k}: ${v === "ok" ? "OK" : v}` : `${k} rating cleared`); } catch (e) { toast(e.message); }
@@ -781,10 +834,17 @@ async function renderSettings() {
       ${field("yarg_exe", "YARG", "YARG.exe, for Play in YARG.", "file")}
       ${field("moonscraper_exe", "Moonscraper", "Moonscraper Chart Editor.exe, for Open in Moonscraper.", "file")}
       <button class="btn primary" id="save" style="margin-top:16px">Save</button></div>
+    <div class="card"><h2>Learned from your ratings</h2><p class="faint" style="margin-top:0">New charts adjust once two charts agree. A new model starts fresh.</p><div id="learned"><span class="spinner"></span></div></div>
     <div class="card" id="phone"><h2>Use RockWizard on your phone</h2><div class="empty"><span class="spinner"></span></div></div>
     <div class="card"><h2>Steam Deck sync</h2><div id="syncbox" class="muted"></div></div>
     <div class="card"><h2>YouTube downloader</h2><p class="muted" style="margin-top:0">YouTube changes often and older downloader versions stop working. If searching or downloading fails, update it.</p>
       <button class="btn" id="dl">Update downloader</button> <span id="dlmsg" class="faint"></span></div>`);
+  api("/api/learned").then((r) => {
+    const box = $("#learned"); if (!box) return;
+    box.innerHTML = r.items.map((x) => `<div class="row spread rc-row"><span><span style="text-transform:capitalize">${esc(x.inst)}</span>: ${ISSUE_TEXT[x.issue][x.net > 0 ? 0 : 1].toLowerCase()}</span>
+      <span class="${x.steps ? "chip green" : "faint"}">${x.steps ? `Adjusting · ${Math.abs(x.net)} charts` : `${Math.abs(x.net)} of ${x.needs} charts`}</span></div>`).join("")
+      || `<p class="faint" style="margin:0">Nothing yet. Rate a part OK or Bad on a RockWizard song and tap what's off.</p>`;
+  }).catch((e) => { const box = $("#learned"); if (box) box.innerHTML = `<p class="chip red">${esc(e.message)}</p>`; });
   $$("[data-pick]").forEach((b) => b.onclick = async () => {
     const v = b.dataset.kind === "file" ? await desk().pick_file() : await desk().pick_folder();
     if (v) $("#" + b.dataset.pick).value = v;

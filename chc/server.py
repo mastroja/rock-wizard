@@ -26,7 +26,7 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import feedback, library, pipeline, rechart, review, search, startup, tidy
+from . import feedback, library, ml, pipeline, rechart, review, search, startup, suggest, tidy
 
 ROOT = Path(__file__).resolve().parent.parent
 WEB = ROOT / "web"
@@ -450,6 +450,17 @@ def jobs_clear(request: Request):
 
 
 # ---------- search ----------
+@app.get("/api/learned")
+def learned():
+    """What the owner's issue tags add up to for the current models."""
+    return {"items": feedback.summary({i: ml.model_tag(i) for i in feedback.ISSUES if ml.available(i)})}
+
+
+@app.get("/api/suggestions")
+def suggestions():
+    return {"songs": suggest.picks(staging_dir(), live_dir())}
+
+
 @app.get("/api/search")
 def do_search(q: str):
     artist, title = search.parse_query(q)
@@ -588,7 +599,10 @@ async def open_on_pc(req: Request):
         exe = cfg.get("moonscraper_exe", "")
         if not exe or not Path(exe).exists():
             raise HTTPException(400, "Set Moonscraper's location in Settings")
-        subprocess.Popen([exe, str(folder / "notes.mid")], cwd=str(Path(exe).parent))
+        chart_file = next((folder / n for n in ("notes.mid", "notes.chart") if (folder / n).exists()), None)
+        if chart_file is None:
+            raise HTTPException(400, "This song has no chart file to open")
+        subprocess.Popen([exe, str(chart_file)], cwd=str(Path(exe).parent))
     return {"ok": True}
 
 
@@ -783,6 +797,13 @@ async def song_rating(req: Request):
     roots = [r.resolve() for r in (staging_dir(), live_dir()) if r]
     if not any(f.resolve().is_relative_to(r) for r in roots):  # friends rate; keep them to the libraries
         raise HTTPException(403, "Only songs in staging or Quickplay can be rated")
+    if b.get("tags") is not None:  # what's off: these change new charts, so only the owner's count
+        require_owner(req)
+        try:
+            feedback.set_issues(f, rater(req), b.get("inst"), feedback.clean_tags(b.get("inst"), b["tags"]))
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        return song_summary(f)
     inst, value, note = b.get("inst"), b.get("rating") or "", b.get("note")
     if inst is not None and (inst not in feedback.INSTRUMENTS or value not in (*feedback.RATINGS, "")):
         raise HTTPException(400, "Unknown rating")

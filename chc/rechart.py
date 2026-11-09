@@ -779,6 +779,7 @@ def run(folder: Path, plan: dict, on_step=lambda i: None, on_progress=lambda f: 
             fields["pro_drums"] = "True"
         # a rating was about the old chart of that part (data/feedback.jsonl keeps it)
         fields |= {feedback.key(i): "" for i in cleared if ini.get(feedback.key(i))}
+        fields |= {feedback.tags_key(i): "" for i in cleared if ini.get(feedback.tags_key(i))}
         if choice != "keep" and ini.get(feedback.key("vocals")):
             fields[feedback.key("vocals")] = ""
         tidy.write_ini(folder, fields)

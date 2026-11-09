@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from . import features, nn
+from . import features, feedback, nn
 
 MODEL_DIR = Path(__file__).resolve().parent.parent / "models"
 _cache: dict = {}
@@ -147,6 +147,8 @@ def fretted_notes(kind: str, wave: np.ndarray, sr: int, with_features=False, sty
     load(model)
     prob, feats = probabilities(model, wave, sr, with_features=True)
     settings = decode_settings(model)
+    if model == kind:  # what the owner has said about this model's charts
+        settings = feedback.tuned(kind, settings, model_tag(kind))
     if style == "cleaner":
         settings["thr"] += CLEANER_THR
     notes = decode_fretted(kind, prob, **settings)
@@ -217,6 +219,8 @@ def drum_notes(wave: np.ndarray, sr: int, thr=None, with_features=False):
     drummer has two hands.
     """
     prob, feats = probabilities("drums", wave, sr, with_features=True)
+    if thr is None:
+        thr = feedback.tuned("drums", {"thr": _cache["drums"][1]}, model_tag("drums"))["thr"]
     notes = decode_drums(prob, thr)
     return (notes, feats) if with_features else notes
 

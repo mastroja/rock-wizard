@@ -214,6 +214,10 @@ audio { width: 100%; height: 36px; }
 .rc-levels select:focus { outline: none; border-color: var(--accent); }
 .rc-levels label:only-child { grid-column: 1 / -1; }
 @media (max-width: 480px) { .form2 { grid-template-columns: 1fr; } .rc-levels { grid-template-columns: 1fr 1fr; } }
+.issues { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 12px; }
+.issue { border: 1px solid var(--border); background: none; color: var(--muted); padding: 5px 10px; border-radius: 999px; font: inherit; font-size: 12.5px; cursor: pointer; }
+.issue:hover { color: var(--text); }
+.issue.on { color: #c9b6ff; border-color: rgba(139, 92, 255, .55); background: rgba(139, 92, 255, .16); }
 .fold summary { cursor: pointer; }
 .fold summary h2 { display: inline; margin: 0; }
 .fold[open] > summary { margin-bottom: 10px; }
