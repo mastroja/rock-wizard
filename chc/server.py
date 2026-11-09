@@ -563,18 +563,22 @@ async def staging_remove(req: Request):
     return {"ok": True}
 
 
+GAMES = {"clonehero": ("clonehero_exe", "Clone Hero"), "yarg": ("yarg_exe", "YARG")}
+
+
 @app.post("/api/open")
 async def open_on_pc(req: Request):
-    """Desktop helpers: open a folder, play in Clone Hero, open in Moonscraper (on this PC)."""
+    """Desktop helpers: open a folder, play in Clone Hero or YARG, open in Moonscraper (on this PC)."""
     require_owner(req)
     b = await req.json()
     what, folder = b.get("what"), body_folder(b["folder"])
     if what == "folder":
         os.startfile(folder)
-    elif what == "clonehero":
-        exe = cfg.get("clonehero_exe", "")
+    elif what in GAMES:
+        key, name = GAMES[what]
+        exe = cfg.get(key, "")
         if not exe or not Path(exe).exists():
-            raise HTTPException(400, "Set Clone Hero's location in Settings")
+            raise HTTPException(400, f"Set {name}'s location in Settings")
         subprocess.Popen([exe], cwd=str(Path(exe).parent))
     elif what == "moonscraper":
         exe = cfg.get("moonscraper_exe", "")
@@ -844,7 +848,7 @@ async def dupes_remove(req: Request):
 
 
 # ---------- settings + status ----------
-SETTING_KEYS = ("songs_dir", "live_dir", "tidy_dir", "charter", "clonehero_exe", "moonscraper_exe")
+SETTING_KEYS = ("songs_dir", "live_dir", "tidy_dir", "charter", "clonehero_exe", "yarg_exe", "moonscraper_exe")
 
 
 @app.get("/api/settings")

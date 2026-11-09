@@ -515,6 +515,7 @@ async function openReview(folder, live = false) {
       </div>`}
       ${local ? `<div class="row wrap" style="margin-top:10px">
         <button class="btn small" data-open-pc="clonehero">${ICON.play} Play in Clone Hero</button>
+        <button class="btn small" data-open-pc="yarg">${ICON.play} Play in YARG</button>
         <button class="btn small" data-open-pc="moonscraper">Open in Moonscraper</button>
         <button class="btn small" data-open-pc="folder">${ICON.folder} Folder</button></div>` : ""}
       <p class="faint" style="margin-bottom:0">${live ? (s.ours ? "Changes here reach the Deck with the next Syncthing sync." : s.rechart ? "Only the parts you pick in Rechart ever change." : "Human-made charts are view-only here, so they're never changed by accident.")
@@ -744,6 +745,7 @@ async function renderSettings() {
       ${field("live_dir", "Live folder", "Where published songs go (your Quickplay folder, which Syncthing sends to the Deck).")}
       ${field("charter", "Charter name", "Written into each song.", "")}
       ${field("clonehero_exe", "Clone Hero", "Clone Hero.exe, for Play in Clone Hero.", "file")}
+      ${field("yarg_exe", "YARG", "YARG.exe, for Play in YARG.", "file")}
       ${field("moonscraper_exe", "Moonscraper", "Moonscraper Chart Editor.exe, for Open in Moonscraper.", "file")}
       <button class="btn primary" id="save" style="margin-top:16px">Save</button></div>
     <div class="card" id="phone"><h2>Use RockWizard on your phone</h2><div class="empty"><span class="spinner"></span></div></div>
@@ -755,7 +757,7 @@ async function renderSettings() {
     if (v) $("#" + b.dataset.pick).value = v;
   });
   $("#save").onclick = async () => {
-    const body = {}; ["songs_dir", "live_dir", "charter", "clonehero_exe", "moonscraper_exe"].forEach((k) => body[k] = $("#" + k).value);
+    const body = {}; ["songs_dir", "live_dir", "charter", "clonehero_exe", "yarg_exe", "moonscraper_exe"].forEach((k) => body[k] = $("#" + k).value);
     Object.assign(S.settings, await post("/api/settings", body)); toast("Saved");
   };
   $("#dl").onclick = async () => { $("#dlmsg").textContent = "Updating…"; const r = await post("/api/downloader/update"); $("#dlmsg").textContent = r.message; };
