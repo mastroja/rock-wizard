@@ -598,6 +598,7 @@ def staging_list(review_all: bool = False):
     root = staging_dir()
     if not root.exists():
         return {"folder": str(root), "songs": []}
+    library.unpack_sngs(root)
     songs = []  # hand charts come along for the My charts tab; the checks are for generated charts
     for p in library.song_folders(root):
         ours = library.is_ours(p)

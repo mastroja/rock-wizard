@@ -256,6 +256,22 @@ def find_duplicates(root: Path) -> list[list[Copy]]:
     return sorted(groups, key=lambda g: g[0].folder.name.lower())
 
 
+def unpack_sngs(root: Path) -> list[Path]:
+    """Turn .sng packages sitting in root (charts downloaded before downloads were unpacked, or
+    dropped in by hand) into song folders; each .sng goes to the Recycle Bin once unpacked."""
+    from . import sng
+    made = []
+    for f in sorted(Path(root).glob("*.sng")):
+        try:
+            folder = sng.unpack(f, sng.free_folder(f.parent, f.stem))
+        except (sng.BadSng, OSError) as e:
+            print(f"could not unpack {f.name}: {e}", file=sys.stderr)
+            continue
+        made.append(folder)
+        recycle([f])
+    return made
+
+
 def recycle(paths) -> tuple[int, list[str]]:
     """Send files/folders to the Windows Recycle Bin. Returns (count, errors)."""
     class SHFILEOPSTRUCTW(ctypes.Structure):

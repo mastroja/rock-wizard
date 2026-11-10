@@ -111,19 +111,22 @@ def community_charts(artist: str, title: str, limit: int = 5) -> list[Chart]:
 
 
 def download_chart(chart: Chart, songs_dir: Path) -> Path:
-    """Save the chart's .sng file (which Clone Hero reads directly) into the songs folder."""
-    safe = re.sub(r'[<>:"/\\|?*]', "", f"{chart.artist} - {chart.name} ({chart.charter})").strip()
-    dest = songs_dir / f"{safe}.sng"
-    tmp = dest.with_suffix(".part")
+    """Download the chart's .sng package and unpack it into a song folder in songs_dir (the app's
+    library, review and the Deck sync work on folders). Returns the folder."""
+    from . import sng
+    safe = re.sub(r'[<>:"/\\|?*]', "", f"{chart.artist} - {chart.name} ({chart.charter})").strip().rstrip(".")
     songs_dir.mkdir(parents=True, exist_ok=True)
-    with _request(chart.download_url, timeout=60) as r, open(tmp, "wb") as f:
-        while True:
-            block = r.read(1 << 16)
-            if not block:
-                break
-            f.write(block)
-    tmp.replace(dest)
-    return dest
+    tmp = songs_dir / f"{safe}.sng.part"
+    try:
+        with _request(chart.download_url, timeout=60) as r, open(tmp, "wb") as f:
+            while True:
+                block = r.read(1 << 16)
+                if not block:
+                    break
+                f.write(block)
+        return sng.unpack(tmp, sng.free_folder(songs_dir, safe))
+    finally:
+        tmp.unlink(missing_ok=True)  # the download's own temp file
 
 
 # ---------- song details (MusicBrainz + Cover Art Archive) ----------
