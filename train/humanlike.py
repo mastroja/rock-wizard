@@ -23,6 +23,7 @@ data/v3/humanlike (delete it to start over). Runs on the CPU when the GPU is hid
 (CUDA_VISIBLE_DEVICES=-1), so it can run beside a training run."""
 import json
 import sys
+import zlib
 from bisect import bisect_right
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -191,7 +192,8 @@ def tracked_beats(song, v2_index, mix_model, device):
 def our_chart(song, inst, model, tag, settings, b, d, device):
     """The app's chart of this part for a held-out song, as a .mid (cached)."""
     sid = data.song_id(song)
-    out = CACHE / f"{sid}_{inst}_{tag}_{int(round(settings['thr'] * 100))}.mid"
+    key = zlib.crc32(json.dumps(settings, sort_keys=True, default=list).encode()) & 0xffff  # any setting change re-charts
+    out = CACHE / f"{sid}_{inst}_{tag}_{key:04x}.mid"
     if out.exists():
         return out
     feats_file = data.V3 / "feats" / f"{sid}_{ml._meta[inst]['stems']}_{ml._meta[inst]['features']}.npy"
@@ -313,8 +315,7 @@ def main():
             continue
         model, _ = ml.load(inst, device)
         tag = ml.model_tag(inst)
-        settings = ml.decode_settings(inst)
-        settings["thr"] = ml.PLAY_THR.get(tag, settings["thr"])  # as the app charts with this model
+        settings = ml.play_settings(inst)  # as the app charts with this model
         rows, groups, labels, songs = [], [], [], {}
         for s in held:
             mid = Path(s["folder"]) / "notes.mid"

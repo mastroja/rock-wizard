@@ -762,6 +762,9 @@ def run(folder: Path, plan: dict, on_step=lambda i: None, on_progress=lambda f: 
             part.unlink(missing_ok=True)
             raise
         part.replace(folder / "notes.mid")
+        # what the app wrote this time, to compare hand fixes against later (kept parts aren't in it)
+        library.save_original(folder, only=[TRACK[i] for i in INSTS if plan[i]["expert"] == "ai"]
+                              + (["PART VOCALS"] if sung else []))
         tags = dict(x.split(":", 1) for x in ini.get("chc_models", "").split())
         tags |= {k: ml.model_tag(k) for k in tiers if ml.available(k)}
         if "guitar" in tiers and plan["guitar_style"] == "busier":

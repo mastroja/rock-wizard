@@ -148,6 +148,8 @@ def write_chart(song_dir: Path, c: dict, title: str, artist: str, charter: str, 
     chart.write_ini(song_dir / "song.ini", title, artist, charter, int(length * 1000), counts,
                     preview_ms=preview_ms, album=d.album if d else "", genre=d.genre if d else "",
                     year=d.year if d else "", tiers=tiers, models=models)
+    from . import library
+    library.save_original(song_dir)  # what the app wrote, to compare hand fixes against later
     return counts
 
 
@@ -226,6 +228,9 @@ def add_intro(song_dir: Path, dry: bool = False) -> float:
     for name in library.OUR_STEMS:
         audio.add_lead(song_dir / name, lead)
     chart.add_intro(mid)
+    kept = library.original_of(song_dir)
+    if kept:
+        chart.add_intro(kept)  # the kept original gets the same bars, so it stays in step with the chart
     ini = library.tidy.read_ini(song_dir)
     fields = {}
     for key, add in (("song_length", int(lead * 1000)), ("preview_start_time", int(lead * 1000))):

@@ -8,11 +8,14 @@
 - find_duplicates: song folders that are the same song under different names ("Artist - Song",
   "Song - Artist", "artist - song (Live) [HQ]", "01. Artist - Song"...).
 - recycle: send folders to the Windows Recycle Bin (restorable), never delete outright.
+- save_original: keep each chart as the app wrote it next to the song (ORIGINAL), so hand fixes
+  made later can be told apart from it and learned from.
 """
 import ctypes
 import hashlib
 import re
 import shutil
+import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -24,6 +27,53 @@ from . import tidy
 MARKER = "chc_generated"  # song.ini key written by this app
 MY_CHART = "chc_my_chart"  # song.ini key: the owner charted this by hand (never training data)
 OUR_STEMS = ("guitar.ogg", "bass.ogg", "drums.ogg", "vocals.ogg")
+
+
+ORIGINAL = "rockwizard_original.dat"  # a .mid under a name no game reads, so it is never listed or played
+
+
+def original_of(folder: Path) -> Path | None:
+    """The kept copy of what the app wrote for this song, if there is one."""
+    p = Path(folder) / ORIGINAL
+    return p if p.exists() else None
+
+
+def save_original(folder: Path, only=None) -> bool:
+    """Keep the chart the app has just written, next to the song. It moves, syncs and is removed
+    with the song folder, and nothing else ever edits it.
+
+    only: track names the app wrote in a part-by-part rechart ("PART GUITAR", ...). Those replace
+    the same tracks in the kept copy; its other parts stay as the app last wrote them, unless the
+    song's tempo map has changed since, which would put them out of step. Parts charted by hand
+    are never in the copy.
+
+    Returns whether a copy was kept. Never raises: charting must not fail over this."""
+    folder = Path(folder)
+    src, dest = folder / "notes.mid", folder / ORIGINAL
+    try:
+        if only is None:
+            shutil.copyfile(src, dest)
+            return True
+        names = {n.strip().upper() for n in only}
+        if not names:
+            return False
+        new = mido.MidiFile(str(src), clip=True)
+        name_of = lambda t: t.name.strip().upper()
+        kept = []
+        if dest.exists():
+            old = mido.MidiFile(str(dest), clip=True)
+            if old.ticks_per_beat == new.ticks_per_beat and list(old.tracks[0]) == list(new.tracks[0]):
+                kept = [t for t in old.tracks[1:] if name_of(t).startswith("PART") and name_of(t) not in names]
+        out = mido.MidiFile(type=1, ticks_per_beat=new.ticks_per_beat)
+        out.tracks += [new.tracks[0], *(t for t in new.tracks[1:] if name_of(t) == "EVENTS"), *kept,
+                       *(t for t in new.tracks[1:] if name_of(t) in names)]
+        part = dest.with_suffix(".part")
+        out.save(part)
+        part.replace(dest)
+        return True
+    except Exception as e:
+        print(f"couldn't keep the original chart of {folder.name}: {e}", file=sys.stderr)
+        return False
 
 
 def config_path() -> Path:

@@ -456,6 +456,13 @@ def learned():
     return {"items": feedback.summary({i: ml.model_tag(i) for i in feedback.ISSUES if ml.available(i)})}
 
 
+@app.get("/api/scoreboard")
+def scoreboard():
+    """Every trained model's results on one page (train.scoreboard), and which one the app uses."""
+    from train import scoreboard as board
+    return board.build()
+
+
 @app.get("/api/suggestions")
 def suggestions():
     return {"songs": suggest.picks(staging_dir(), live_dir())}

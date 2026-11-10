@@ -141,6 +141,31 @@ CLEANER_THR = 0.1         # how much surer the model must be of a note for the c
 # 33b5d457: 0.40 -> 0.30 misses a quarter fewer notes on test songs for ~2 points more extras.
 # Keyed by fingerprint so a new model uses its own; new charts only, never train/* (decode_settings).
 PLAY_THR = {"33b5d457": 0.30}
+# Most frets a note may have in new charts, where that is tighter than MAX_CHORD. Humans chart a
+# chord on 0.4% of bass notes and the app did on 3.3%, the detector's biggest bass tell
+# (train.humanlike): single notes took it from 85.7% to 79.0% and exact-fret F1 from .480 to .500.
+PLAY_MAX_CHORD = {"bass": 1}
+# Hold rule for a specific model file (decode_fretted's sus / min_hold / gap_hold), over its
+# calibrated one. Tuned on val songs, checked on test and through the full charting path
+# (2026-11-09, guitar 35fecfd4: {"sus": 0.2, "min_hold": 0.3, "gap_hold": (0.75, 0.2)} gets
+# hold-or-not right 92.0% vs 90.9% and catches 54% of real holds vs 36%, for 23% vs 15% of ours
+# not being in the human chart; the earlier guitar 1cb37c91 wanted gap_hold (0.5, 0.2)).
+# Switched on by the owner the same day.
+PLAY_HOLDS: dict = {"35fecfd4": {"sus": 0.2, "min_hold": 0.3, "gap_hold": (0.75, 0.2)}}
+
+
+def play_settings(kind: str, model: str | None = None) -> dict:
+    """The decoding settings new charts are made with: the model's calibrated ones plus the
+    owner's choices above. train/* scores models with decode_settings instead, except
+    train.humanlike, which judges charts as the app makes them."""
+    model = model or kind
+    settings = decode_settings(model)
+    if model == kind:
+        settings["thr"] = PLAY_THR.get(model_tag(kind), settings["thr"])
+        settings |= PLAY_HOLDS.get(model_tag(kind), {})
+    if kind in PLAY_MAX_CHORD:
+        settings["max_chord"] = PLAY_MAX_CHORD[kind]
+    return settings
 
 
 def fretted_notes(kind: str, wave: np.ndarray, sr: int, with_features=False, style: str = "normal"):
@@ -150,9 +175,8 @@ def fretted_notes(kind: str, wave: np.ndarray, sr: int, with_features=False, sty
     model = BUSIER if style == "busier" else kind
     load(model)
     prob, feats = probabilities(model, wave, sr, with_features=True)
-    settings = decode_settings(model)
+    settings = play_settings(kind, model)
     if model == kind:  # what the owner has said about this model's charts
-        settings["thr"] = PLAY_THR.get(model_tag(kind), settings["thr"])
         settings = feedback.tuned(kind, settings, model_tag(kind))
     if style == "cleaner":
         settings["thr"] += CLEANER_THR
@@ -160,8 +184,17 @@ def fretted_notes(kind: str, wave: np.ndarray, sr: int, with_features=False, sty
     return (notes, feats) if with_features else notes
 
 
+GAP_HOLD_MAX = 4.0  # seconds of gap a gap-triggered hold is measured against (so a song's last note isn't held for a minute)
+
+
+def _hold_run(sustain: np.ndarray, thr: float) -> int:
+    """Frames the sustain output stays above thr from the start of this stretch."""
+    held = sustain > thr
+    return int(np.argmin(held)) if not held.all() else len(held)
+
+
 def decode_fretted(kind: str, prob: np.ndarray, thr=0.35, ratios=None, hopo=0.5, sus=0.5, rel=1.0,
-                   size_bias=(1.0, 1.0)):
+                   size_bias=(1.0, 1.0), max_chord=None, min_hold=None, gap_hold=None):
     """Model probabilities -> notes.
 
     Note times are peaks of the strongest lane probability. A second (third) lane joins
@@ -173,8 +206,15 @@ def decode_fretted(kind: str, prob: np.ndarray, thr=0.35, ratios=None, hopo=0.5,
     (size_bias scales the 2- and 3-fret chances, tuned so chords are as common as in real charts),
     then take that many of the likeliest lanes. Models with an onset output (after those) take
     note times from it instead of the strongest lane.
+
+    Holds: a note is held for as long as the sustain output stays above `sus`, if that is at
+    least min_hold seconds (default MIN_SUSTAIN). gap_hold=(seconds, level) also holds a note the
+    rule missed when the next note is at least that far away and the sustain output averages
+    `level` right after the note: humans hold most notes with half a second or more of space
+    after them, and the model's output often dips too early to say so.
     """
     ratios = ratios or CHORD_RATIO[kind]
+    most = max_chord or MAX_CHORD[kind]
     hopo_thr, sus_thr = hopo, sus
     lanes_p = prob[:, :5]
     has_attr = prob.shape[1] >= 7
@@ -192,10 +232,10 @@ def decode_fretted(kind: str, prob: np.ndarray, thr=0.35, ratios=None, hopo=0.5,
         order = np.argsort(-seg)
         if has_size:
             n = int(np.argmax(prob[max(0, fr - 2): fr + 3, 10:13].max(axis=0) * bias)) + 1
-            lanes = [int(l) for l in order[:min(n, MAX_CHORD[kind])]]
+            lanes = [int(l) for l in order[:min(n, most)]]
         else:
             lanes = [int(order[0])]
-            for j in range(1, MAX_CHORD[kind]):
+            for j in range(1, most):
                 if seg[order[j]] >= max(0.3, ratios[j - 1] * seg[order[0]]):
                     lanes.append(int(order[j]))
                 else:
@@ -204,11 +244,15 @@ def decode_fretted(kind: str, prob: np.ndarray, thr=0.35, ratios=None, hopo=0.5,
         if has_attr:
             hopo = bool(prob[max(0, fr - 2): fr + 3, 5].max() > hopo_thr)
             nxt = frames[k + 1] if k + 1 < len(frames) else len(prob)
-            held = prob[fr + 2: nxt, 6] > sus_thr
-            n = int(np.argmin(held)) if not held.all() else len(held)
+            after = prob[fr + 2: nxt, 6]
+            n = _hold_run(after, sus_thr)
             length = (n + 2) / features.FPS if n else 0.0
-            if length < MIN_SUSTAIN:
+            if length < (MIN_SUSTAIN if min_hold is None else min_hold):
                 length = 0.0
+            if not length and gap_hold and len(after):
+                gap = min((nxt - fr) / features.FPS, GAP_HOLD_MAX)
+                if gap >= gap_hold[0] and after[:10].mean() >= gap_hold[1]:
+                    length = max((_hold_run(after, 0.1) + 2) / features.FPS, min(gap - 0.12, 0.5 * gap + 0.2))
         out.append((fr / features.FPS, tuple(sorted(lanes)), round(length, 3), hopo, float(seg[order[0]])))
     if has_rel and rel > 0 and out:
         placed = follow_directions([n[1] for n in out], segs, rels, rel)

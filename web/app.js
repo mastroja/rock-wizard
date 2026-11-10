@@ -814,6 +814,23 @@ function libDupes() {
 }
 
 // ---------- settings ----------
+async function loadScoreboard() {
+  const box = $("#board");
+  let r;
+  try { r = await api("/api/scoreboard"); } catch (e) { box.innerHTML = `<p class="chip red">${esc(e.message)}</p>`; return; }
+  if (!box.isConnected) return;
+  const cell = (c, v) => v === undefined ? `<td class="faint">–</td>`
+    : `<td class="${v === c.best ? "best" : ""}">${c.percent ? (v * 100).toFixed(1) + "%" : v.toFixed(3)}</td>`;
+  const played = (x) => Object.keys(x).length ? `${x.good || 0} good · ${x.ok || 0} ok · ${x.bad || 0} bad` : "";
+  box.innerHTML = r.insts.map((b) => `<h3 class="board-inst">${esc(b.inst)} <span class="faint">${b.songs} test songs</span></h3>
+    <div class="board-wrap"><table class="board"><thead><tr><th>Run</th><th>What it tried</th>${b.columns.map((c) =>
+      `<th title="${c.higher ? "Higher" : "Lower"} is better">${esc(c.label)} ${c.higher ? "↑" : "↓"}</th>`).join("")}<th>How it played</th></tr></thead>
+    <tbody>${b.rows.map((x) => `<tr class="${x.in_app ? "inapp" : ""}"><td>${x.run || ""}</td>
+      <td class="what">${esc(x.name)}${x.in_app ? ` <span class="chip accent">In the app</span>` : ""}</td>
+      ${b.columns.map((c) => cell(c, x.values[c.key])).join("")}<td class="faint">${played(x.ratings)}</td></tr>`).join("")}</tbody></table></div>`).join("")
+    + `<p class="faint" style="margin-bottom:0">↑ higher is better, ↓ lower is better. Human-or-AI is how often a detector tells our chart from a human's: two human studios score ${Math.round(r.studios * 100)}%, so that is the target.</p>`;
+}
+
 async function renderSettings() {
   if (!owner()) {
     page("Settings", "", `<div class="card"><h2>You</h2><p>You're using RockWizard as <b>${esc(S.me.name)}</b>.
@@ -835,6 +852,9 @@ async function renderSettings() {
       ${field("moonscraper_exe", "Moonscraper", "Moonscraper Chart Editor.exe, for Open in Moonscraper.", "file")}
       <button class="btn primary" id="save" style="margin-top:16px">Save</button></div>
     <div class="card"><h2>Learned from your ratings</h2><p class="faint" style="margin-top:0">New charts adjust once two charts agree. A new model starts fresh.</p><div id="learned"><span class="spinner"></span></div></div>
+    <details class="card fold" id="boardcard"><summary><h2>Model scoreboard</h2></summary>
+      <p class="faint">Every model trained so far, scored on songs it never saw. The best in each column is highlighted.</p>
+      <div id="board"><span class="spinner"></span></div></details>
     <div class="card" id="phone"><h2>Use RockWizard on your phone</h2><div class="empty"><span class="spinner"></span></div></div>
     <div class="card"><h2>Steam Deck sync</h2><div id="syncbox" class="muted"></div></div>
     <div class="card"><h2>YouTube downloader</h2><p class="muted" style="margin-top:0">YouTube changes often and older downloader versions stop working. If searching or downloading fails, update it.</p>
@@ -845,6 +865,7 @@ async function renderSettings() {
       <span class="${x.steps ? "chip green" : "faint"}">${x.steps ? `Adjusting · ${Math.abs(x.net)} charts` : `${Math.abs(x.net)} of ${x.needs} charts`}</span></div>`).join("")
       || `<p class="faint" style="margin:0">Nothing yet. Rate a part OK or Bad on a RockWizard song and tap what's off.</p>`;
   }).catch((e) => { const box = $("#learned"); if (box) box.innerHTML = `<p class="chip red">${esc(e.message)}</p>`; });
+  $("#boardcard").addEventListener("toggle", () => { if ($("#boardcard").open && !$("#board table")) loadScoreboard(); });
   $$("[data-pick]").forEach((b) => b.onclick = async () => {
     const v = b.dataset.kind === "file" ? await desk().pick_file() : await desk().pick_folder();
     if (v) $("#" + b.dataset.pick).value = v;
