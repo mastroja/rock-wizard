@@ -49,7 +49,7 @@ def load(kind: str, device="cuda"):
 
 def stem_source(kind: str) -> str:
     """Which separator's stem this model expects: 'ft' (htdemucs_ft), 's6' (htdemucs_6s) or
-    'sw' (BS-RoFormer SW, which the app cannot make yet: train.separate_sw)."""
+    'sw' (BS-RoFormer SW, made by chc.sw_worker in its own environment: train.separate_sw)."""
     if not available(kind):
         return "ft"
     load(kind, "cuda" if torch.cuda.is_available() else "cpu")

@@ -13,6 +13,10 @@ import numpy as np
 from . import analysis, audio, chart, feedback, ml, phrases, rating, structure, vocals
 
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+ROOT = Path(__file__).resolve().parent.parent
+# BS-RoFormer SW runs in its own Python environment (see train.separate_sw)
+SW_PYTHON = ROOT / ".tmp" / "sepenv" / "Scripts" / "python.exe"
+SW_MODEL = ROOT / ".tmp" / "sepmodels" / "BS-Roformer-SW.ckpt"
 STEM_TO_CH = {"other": "guitar", "bass": "bass", "drums": "drums", "vocals": "vocals"}
 STEPS = ["Reading your song", "Splitting it into instruments", "Finding the beat",
          "Writing the notes", "Saving the song folder"]
@@ -43,9 +47,12 @@ def parse_name(path: Path) -> tuple[str, str]:
 
 
 def _separate(wav: Path, out: Path, model: str, on_progress, stop: threading.Event):
-    proc = subprocess.Popen([sys.executable, "-m", "chc.worker", str(wav), str(out), model],
-                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                            cwd=Path(__file__).resolve().parent.parent, creationflags=NO_WINDOW)
+    if model == "sw":
+        cmd = [str(SW_PYTHON), "-m", "chc.sw_worker", str(wav), str(out)]
+    else:
+        cmd = [sys.executable, "-m", "chc.worker", str(wav), str(out), model]
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                            cwd=ROOT, creationflags=NO_WINDOW)
     tail = []
     for line in proc.stdout:
         if stop.is_set():
@@ -58,6 +65,36 @@ def _separate(wav: Path, out: Path, model: str, on_progress, stop: threading.Eve
             tail.append(line.rstrip())
     if proc.wait() != 0:
         raise RuntimeError("Splitting failed:\n" + "\n".join(tail[-6:]))
+
+
+def guitar_stem_source() -> str:
+    """The extra separator the guitar model needs on top of htdemucs_ft: 's6', 'sw' or '' (none)."""
+    src = ml.stem_source("guitar") if ml.available("guitar") else "ft"
+    if src == "sw" and not (SW_PYTHON.exists() and SW_MODEL.exists()):
+        print("guitar model wants BS-RoFormer SW stems but its environment is missing: using Demucs' other",
+              file=sys.stderr)
+        return ""
+    return src if src in ("s6", "sw") else ""
+
+
+def guitar_stem(wav: Path, work: Path, other_wav: Path, on_progress, stop: threading.Event) -> Path:
+    """The stem the guitar model was trained on. Falls back to Demucs' "other" if the SW separator
+    fails (the SW-trained model still charts better from that than the older model did)."""
+    src = guitar_stem_source()
+    if not src:
+        return other_wav
+    if src == "s6":
+        # htdemucs_6s splits guitar from keys/synths
+        _separate(wav, work / "six", "htdemucs_6s", on_progress, stop)
+        return work / "six" / "guitar.wav"
+    try:
+        _separate(wav, work / "sw", "sw", on_progress, stop)
+        return work / "sw" / "guitar.wav"
+    except Cancelled:
+        raise
+    except Exception as e:
+        print(f"SW guitar stem failed, using Demucs' other: {e}", file=sys.stderr)
+        return other_wav
 
 
 def chart_stems(guitar_wav: Path, bass_wav: Path, drums_wav: Path, mix_wav: Path,
@@ -265,16 +302,12 @@ def make_song(src: Path, artist: str, title: str, songs_dir: Path, charter: str 
         check()
 
         on_step(1)
-        six = ml.available("guitar") and ml.stem_source("guitar") == "s6"
-        span = 0.5 if six else 0.65
+        extra = guitar_stem_source()
+        span = 0.5 if extra else 0.65
         _separate(wav, preview_dir, model, lambda f: on_progress(0.05 + span * f), stop)
         check()
-        guitar_wav = preview_dir / "other.wav"
-        if six:
-            # this guitar model learned from htdemucs_6s, which splits guitar from keys/synths
-            _separate(wav, work / "six", "htdemucs_6s", lambda f: on_progress(0.55 + 0.15 * f), stop)
-            guitar_wav = work / "six" / "guitar.wav"
-            check()
+        guitar_wav = guitar_stem(wav, work, preview_dir / "other.wav", lambda f: on_progress(0.55 + 0.15 * f), stop)
+        check()
 
         on_step(2); on_progress(0.72)
         c = chart_stems(guitar_wav, preview_dir / "bass.wav", preview_dir / "drums.wav", wav,
