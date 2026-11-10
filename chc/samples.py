@@ -32,27 +32,39 @@ def _key(artist: str, title: str) -> str:
     return f"{search.normalize(artist)}|{search.normalize(title)}"
 
 
-def cached(artist: str, title: str) -> dict | None:
-    """{"art", "audio"} when known, {} when iTunes is known not to have it, None when not asked yet."""
+def _entry(artist: str, title: str) -> dict | None:
     with _cache_lock:
-        e = _load().get(_key(artist, title))
-    if not e or time.time() - e.get("at", 0) > (KEEP if e.get("audio") else RETRY):
-        return None
-    return {"art": e["art"], "audio": e["audio"]} if e.get("audio") else {}
+        return _load().get(_key(artist, title))
 
 
-def get(artist: str, title: str) -> dict:
-    """The preview for a song, from the cache or iTunes; {} when there is none (or iTunes is busy)."""
+def _due(artist: str, title: str) -> bool:
+    """Whether to ask iTunes (again) about this song."""
+    e = _entry(artist, title)
+    return not e or time.time() - e.get("at", 0) > (KEEP if e.get("audio") else RETRY)
+
+
+def cached(artist: str, title: str) -> dict | None:
+    """{"art", "audio"} when known (an old one still serves while warm() renews it), {} when
+    iTunes is known not to have it, None when not asked yet."""
+    e = _entry(artist, title)
+    if e and e.get("audio"):
+        return {"art": e["art"], "audio": e["audio"]}
+    return None if _due(artist, title) else {}
+
+
+def get(artist: str, title: str, renew: bool = False) -> dict:
+    """The preview for a song, from the cache or iTunes; {} when there is none (or iTunes is busy).
+    `renew` asks iTunes again when the cached answer is old."""
     global _last
     with _net_lock:  # one request at a time, GAP apart
         hit = cached(artist, title)
-        if hit is not None:
+        if hit is not None and not (renew and _due(artist, title)):
             return hit
         time.sleep(max(0.0, _last + GAP - time.time()))
         try:
             found = search.sample(artist, title) or {}
         except Exception:
-            return {}  # offline or asked too often: not remembered, so it is tried again
+            return hit or {}  # offline or asked too often: not remembered, so it is tried again
         finally:
             _last = time.time()
         with _cache_lock:
@@ -67,7 +79,7 @@ def get(artist: str, title: str) -> dict:
 def warm(songs: list[tuple[str, str]]) -> None:
     """Fetch the previews not known yet, slowly, in the background (one run at a time)."""
     global _warming
-    todo = [s for s in songs if cached(*s) is None]
+    todo = [s for s in songs if _due(*s)]
     if _warming or not todo:
         return
     _warming = True
@@ -76,7 +88,7 @@ def warm(songs: list[tuple[str, str]]) -> None:
         global _warming
         try:
             for artist, title in todo:
-                get(artist, title)
+                get(artist, title, renew=True)
                 time.sleep(GAP)  # leaves room for the previews someone is waiting for
         finally:
             _warming = False
