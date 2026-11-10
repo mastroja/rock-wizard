@@ -601,6 +601,7 @@ function wireSort(v, redraw) {
 // ---------- staging ----------
 let stagingFilter = "all";
 const MY_CHIP = `<span class="chip green">My chart</span>`;
+const DL_CHIP = `<span class="chip">Downloaded</span>`;
 const initials = (s) => (s || "?").split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
 const coverHTML = (s, cls = "cover", w = 300) => s.has_cover
   ? `<img class="${cls}" src="/api/cover?${qs({ folder: s.folder, v: s.cover_v || 0, w })}" alt="" loading="lazy">`
@@ -612,7 +613,7 @@ async function renderStaging(reviewAll = false) {
     `${owner() ? `<button class="btn" id="fillcovers">Find missing covers</button> ` : ""}<button class="btn" id="checkall">Check all</button>`);
   $("#checkall").onclick = () => renderStaging(true);
   if (owner()) $("#fillcovers").onclick = async (e) => {
-    const missing = (S.staging ? S.staging.songs : []).filter((x) => x.ours && !x.has_cover).map((x) => x.folder);
+    const missing = (S.staging ? S.staging.songs : []).filter((x) => (x.ours || x.downloaded) && !x.has_cover).map((x) => x.folder);
     if (!missing.length) { toast("Every song already has a cover"); return; }
     e.target.disabled = true; e.target.textContent = `Finding ${missing.length} cover${missing.length === 1 ? "" : "s"}…`;
     try {
@@ -624,7 +625,8 @@ async function renderStaging(reviewAll = false) {
   let r;
   try { r = await api("/api/staging?" + qs({ review_all: reviewAll })); } catch (e) { $("#main").innerHTML += `<p class="chip red">${esc(e.message)}</p>`; return; }
   S.staging = r;
-  const made = r.songs.filter((s) => s.ours), hand = r.songs.filter((s) => !s.ours);
+  // downloaded charts go through staging like RockWizard's own; "My charts" is for hand charts
+  const made = r.songs.filter((s) => s.ours || s.downloaded), hand = r.songs.filter((s) => !s.ours && !s.downloaded);
   const songs = sortSongs(stagingFilter === "mine" ? hand : made, sortKey("staging")).filter((s) => stagingFilter === "all" || stagingFilter === "mine" || s.status === stagingFilter);
   const counts = { all: made.length, draft: made.filter((s) => s.status === "draft").length, reviewed: made.filter((s) => s.status === "reviewed").length, mine: hand.length };
   $("#main").querySelector(".empty").outerHTML = `
@@ -635,13 +637,14 @@ async function renderStaging(reviewAll = false) {
     </div>
     ${songs.length ? `<div class="songs">${songs.map((s) => {
       const v = s.verdict && VERDICT[s.verdict];
-      return `<div class="song" data-open="${esc(s.folder)}" ${s.ours ? "" : `data-hand="1"`}>${coverHTML(s)}
+      const staged = s.ours || s.downloaded;
+      return `<div class="song" data-open="${esc(s.folder)}" ${staged ? "" : `data-hand="1"`}>${coverHTML(s)}
         <div class="meta"><div class="t ellipsis">${esc(s.title || s.name)}</div>
           <div class="faint ellipsis">${esc(s.artist || "Unknown artist")}</div>
           <div class="row wrap" style="margin-top:8px;gap:6px">
-            ${!s.ours ? (s.mine ? MY_CHIP : `<span class="chip">Not marked yet</span>`) : v ? `<span class="chip ${v[0]}">${v[0] === "green" ? "✓" : v[0] === "yellow" ? "!" : "✕"} ${v[0] === "green" ? "OK" : v[0] === "yellow" ? "Check" : "Problems"}</span>` : `<span class="chip">Not checked</span>`}
-            ${s.status === "reviewed" && s.ours ? `<span class="chip accent">Reviewed</span>` : ""}${byChip(s)}
-            ${owner() && s.ours ? `<button class="btn small danger" data-del="${esc(s.folder)}" data-title="${esc(s.title || s.name)}" style="margin-left:auto">Delete</button>` : ""}
+            ${s.downloaded ? DL_CHIP : ""}${!staged ? (s.mine ? MY_CHIP : `<span class="chip">Not marked yet</span>`) : v ? `<span class="chip ${v[0]}">${v[0] === "green" ? "✓" : v[0] === "yellow" ? "!" : "✕"} ${v[0] === "green" ? "OK" : v[0] === "yellow" ? "Check" : "Problems"}</span>` : `<span class="chip">Not checked</span>`}
+            ${s.status === "reviewed" && staged ? `<span class="chip accent">Reviewed</span>` : ""}${byChip(s)}
+            ${owner() && staged ? `<button class="btn small danger" data-del="${esc(s.folder)}" data-title="${esc(s.title || s.name)}" style="margin-left:auto">Delete</button>` : ""}
           </div></div></div>`;
     }).join("")}</div>` : `<div class="card empty">No songs here yet.</div>`}`;
   $$("[data-filter]").forEach((b) => b.onclick = () => { stagingFilter = b.dataset.filter; renderStaging(); });
@@ -819,7 +822,7 @@ async function openReview(folder, live = false) {
         ${s.status !== "reviewed" ? `<button class="btn" id="rev">Mark reviewed</button>` : ""}
       </div>`}
       ${local ? playHTML() : ""}
-      ${s.ours ? "" : `<label class="check"><input type="checkbox" id="mine" ${s.mine ? "checked" : ""}> I charted this myself</label>`}
+      ${s.ours || s.downloaded ? "" : `<label class="check"><input type="checkbox" id="mine" ${s.mine ? "checked" : ""}> I charted this myself</label>`}
       ${moreHTML(s, live, local)}
       <p class="faint" style="margin-bottom:0">${live ? (s.ours ? "Changes here reach the Deck with the next Syncthing sync." : s.rechart ? "Only the parts you pick in Rechart ever change." : "Human-made charts are view-only here, so they're never changed by accident.")
         : "Publishing moves the song into your live folder; Syncthing takes it to the Deck."}</p>
@@ -836,7 +839,7 @@ async function openReview(folder, live = false) {
     <details class="card fold"><summary><h2>Listen</h2></summary><div class="stems">
       ${stems.map((k) =>
         `<span>${k}</span><audio controls preload="none" src="/api/audio?${qs({ folder: s.folder, stem: k })}"></audio>`).join("")}</div></details>
-    ${!live || s.ours ? rateHTML(s) : ""}
+    ${(!live || s.ours) && !s.downloaded ? rateHTML(s) : ""}
     ${owner() && s.rechart ? rechartHTML(s.rechart) : ""}`;
   $("#x", dr).onclick = closeDrawer;
   const refreshAfter = (folder2) => { openReview(folder2, live); if (view() === "staging") renderStaging(); if (view() === "live") renderLive(); };
@@ -845,7 +848,7 @@ async function openReview(folder, live = false) {
     if (!confirm("Move this song back to staging? It leaves your live library (and the Deck after the next sync).")) return;
     try { await post("/api/live/unpublish", { folder: s.folder }); toast("Moved back to staging"); closeDrawer(); renderLive(); } catch (e) { toast(e.message); }
   };
-  if (!live || s.ours) wireRating(dr, s);
+  if ((!live || s.ours) && !s.downloaded) wireRating(dr, s);
   if (owner()) wireRechart(dr, s);
   const mine = $("#mine", dr);
   if (mine) mine.onchange = async () => {

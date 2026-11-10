@@ -558,8 +558,7 @@ async def chart_download(req: Request):
     by = added_by(req)
     dest = live_dir() if b.get("to") == "live" and live_dir() and not by else staging_dir()
     saved = search.download_chart(c, dest)
-    if by and saved and Path(saved).is_dir():
-        tidy.write_ini(Path(saved), {"chc_added_by": by})
+    tidy.write_ini(Path(saved), {library.DOWNLOADED: 1} | ({"chc_added_by": by} if by else {}))
     return {"saved": str(saved)}
 
 
@@ -590,7 +589,8 @@ def song_summary(folder: Path, with_review=False) -> dict:
             "genre": ini.get("genre", ""), "charter": ini.get("charter", ""), "added_by": ini.get("chc_added_by", ""),
             "stems": [p.stem for p in folder.iterdir() if p.suffix.lower() in (".ogg", ".opus", ".mp3")],
             "modified": mtime, "verdict": r["verdict"] if r else None,
-            "mine": ini.get(library.MY_CHART, "0") not in ("", "0")} | feedback.of(ini)
+            "mine": ini.get(library.MY_CHART, "0") not in ("", "0"),
+            "downloaded": ini.get(library.DOWNLOADED, "0") not in ("", "0")} | feedback.of(ini)
 
 
 @app.get("/api/staging")
@@ -632,9 +632,10 @@ async def staging_publish(req: Request):
 
 @app.post("/api/staging/remove")
 async def staging_remove(req: Request):
-    """Send a staging song to the Recycle Bin. Only RockWizard's own songs inside staging qualify."""
+    """Send a staging song to the Recycle Bin. Only RockWizard's own songs and downloaded charts
+    inside staging qualify."""
     require_owner(req)
-    f = our_song((await req.json())["folder"])
+    f = staged_song((await req.json())["folder"])
     if staging_dir().resolve() not in f.resolve().parents:
         raise HTTPException(403, "Only songs in staging can be removed here")
     if any(j.status in ("queued", "running") and j.args.get("folder") == str(f) for j in jobs.values()):
@@ -714,11 +715,24 @@ def cover(folder: str, w: int = 0):
     raise HTTPException(404)
 
 
+def in_staging(f: Path) -> bool:
+    return staging_dir().resolve() in f.resolve().parents
+
+
 def editable_song(path: str) -> Path:
-    """A song whose details and cover can be changed: RockWizard's, or one the owner charted."""
+    """A song whose details and cover can be changed: RockWizard's, one the owner charted, or a
+    downloaded chart still in staging (once live it is a human chart and left alone)."""
     f = body_folder(path)
-    if not (library.is_ours(f) or library.is_mine(f)):
+    if not (library.is_ours(f) or library.is_mine(f) or (library.is_downloaded(f) and in_staging(f))):
         raise HTTPException(403, "Only your charts and songs RockWizard made can be edited here")
+    return f
+
+
+def staged_song(path: str) -> Path:
+    """RockWizard's song, or a downloaded chart still in staging."""
+    f = body_folder(path)
+    if not (library.is_ours(f) or (library.is_downloaded(f) and in_staging(f))):
+        raise HTTPException(403, "Only songs RockWizard made can be edited here")
     return f
 
 
@@ -768,7 +782,7 @@ async def cover_fill(req: Request):
     require_owner(req)
     done, missed = [], []
     for path in (await req.json())["folders"]:
-        f = our_song(path)
+        f = staged_song(path)
         if (f / "album.jpg").exists() or (f / "album.png").exists():
             continue
         ini = tidy.read_ini(f)

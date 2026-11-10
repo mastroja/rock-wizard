@@ -91,6 +91,14 @@ def check(folder: Path, live_dir: Path | None = None) -> Report:
         rep.add("yellow", "song.ini has no artist (the song still plays, but sorting and Tidy names need it)")
     if not ((folder / "album.jpg").exists() or (folder / "album.png").exists()):
         rep.add("info", "No album cover (Find cover art, below)")
+    if library.is_downloaded(folder):
+        # someone else's finished chart: the note checks below are for RockWizard's own charts
+        if not any((folder / n).exists() for n in ("notes.mid", "notes.chart")):
+            rep.add("red", "No chart (notes.mid or notes.chart) in the folder")
+        if not any(p.suffix.lower() in AUDIO_EXT for p in folder.iterdir()):
+            rep.add("red", "No audio files in the folder")
+        rep.add("info", f"Downloaded chart by {ini.get('charter') or 'unknown'}: only the basics are checked")
+        return rep
     mid = folder / "notes.mid"
     if not mid.exists():
         rep.add("red", "No chart (notes.mid) in the folder")

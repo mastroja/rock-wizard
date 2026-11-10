@@ -26,6 +26,7 @@ from . import tidy
 
 MARKER = "chc_generated"  # song.ini key written by this app
 MY_CHART = "chc_my_chart"  # song.ini key: the owner charted this by hand (never training data)
+DOWNLOADED = "chc_downloaded"  # song.ini key: someone else's chart, downloaded from Chorus
 OUR_STEMS = ("guitar.ogg", "bass.ogg", "drums.ogg", "vocals.ogg")
 
 
@@ -86,6 +87,10 @@ def config_path() -> Path:
 
 def is_mine(folder: Path) -> bool:
     return tidy.read_ini(folder).get(MY_CHART, "0") not in ("", "0")
+
+
+def is_downloaded(folder: Path) -> bool:
+    return tidy.read_ini(folder).get(DOWNLOADED, "0") not in ("", "0")
 
 
 def is_ours(folder: Path) -> bool:
@@ -267,6 +272,7 @@ def unpack_sngs(root: Path) -> list[Path]:
         except (sng.BadSng, OSError) as e:
             print(f"could not unpack {f.name}: {e}", file=sys.stderr)
             continue
+        tidy.write_ini(folder, {DOWNLOADED: 1})
         made.append(folder)
         recycle([f])
     return made
