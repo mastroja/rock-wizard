@@ -1,10 +1,10 @@
 """python -m train.train <kind> [--steps N] [--out models/x.pt] [--dm-frac 0.6]
-                           [--data v2|v3] [--dm-src ft|s6] [--rel] [--size] [--onset]
+                           [--data v2|v3] [--dm-src ft|s6|sw] [--rel] [--size] [--onset]
                            [--focus 3] [--solo-frac 0.25] [--down 2]
 
 kind is the feature/model kind (guitar, guitar_hr, bass, bass_hr, drums, mix). --data v3 reads
 the song-id layout built by separate_v3 + feats_v3; --dm-src picks which Demucs model's stems
-to learn from (s6 = htdemucs_6s's real guitar stem); --rel adds up/same/down fret outputs.
+to learn from (s6 = htdemucs_6s's real guitar stem, sw = BS-RoFormer SW's, see separate_sw); --rel adds up/same/down fret outputs.
 --focus weighs fast runs and guitar solos more in the loss (the most missed notes), --solo-frac
 starts that share of windows inside a solo, --onset adds a lane-free note-start output and
 --down sets how coarse in time the recurrent layer runs."""
@@ -226,7 +226,7 @@ def main():
     ap.add_argument("--dm-frac", type=float, default=0.5,
                     help="share of training windows taken from Demucs-separated stems")
     ap.add_argument("--data", choices=["v2", "v3"], default="v2")
-    ap.add_argument("--dm-src", choices=["ft", "s6"], default="ft")
+    ap.add_argument("--dm-src", choices=["ft", "s6", "sw"], default="ft")
     ap.add_argument("--rel", action="store_true", help="also learn up/same/down fret moves")
     ap.add_argument("--size", action="store_true", help="also learn how many frets each note has (needs --rel)")
     ap.add_argument("--onset", action="store_true",

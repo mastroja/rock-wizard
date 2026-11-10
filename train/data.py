@@ -51,7 +51,8 @@ class Layout:
         by position in data/index.json (tonight's run and earlier).
     v3: everything under data/v3, named by song id: stems/<id>/<stem>.flac from Demucs, and
         feats/<id>_<source>_<kind>.npy with source 'clean' (the song's own stem), 'ft'
-        (htdemucs_ft) or 's6' (htdemucs_6s, which has a real guitar stem).
+        (htdemucs_ft), 's6' (htdemucs_6s, which has a real guitar stem) or 'sw' (BS-RoFormer SW,
+        a better guitar stem: train.separate_sw).
     """
 
     def __init__(self, version="v2", dm_src="ft"):

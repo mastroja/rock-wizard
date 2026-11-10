@@ -160,8 +160,49 @@ def _mb(path: str, **params):
             time.sleep(2 * (attempt + 1))
 
 
-def song_details(artist: str, title: str) -> Details | None:
-    """The song's original studio release: album, year, genre, length."""
+def _straight(s: str) -> str:
+    """Typographic quotes and dashes as the plain ones people type."""
+    return (s or "").translate(str.maketrans("‘’‚′“”„‐‑‒", "''''\"\"\"---"))
+
+
+def _spelled(s: str) -> str:
+    """A name's letters and digits, tags in brackets included: 'Free Fallin’' is "Free Fallin'",
+    'Song (live)' is not 'Song'."""
+    return re.sub(r"[^a-z0-9]+", " ", _straight(s).lower().replace("&", " and ")).strip()
+
+
+VARIANT = ("live", "demo", "remix", "edit", "acoustic", "instrumental", "rehears", "session", "karaoke",
+           "re-record", "rerecord", "alternate", "unplugged", "radio")
+ORIGINAL = ("album", "original", "studio", "single", "lp", "stereo", "explicit", "clean")
+
+
+def _variant(note: str) -> bool:
+    """Does MusicBrainz's note on a recording ('live, 1994: Tipperary', 'album version') mark it
+    as something other than the song as first released?"""
+    note = note.lower()
+    if any(w in note for w in VARIANT):
+        return True
+    return ("version" in note or "mix" in note) and not any(w in note for w in ORIGINAL)
+
+
+MB_PAGES = 3  # of 100 recordings: classics have hundreds, and the original must be among those ranked
+
+
+def _recordings(query: str) -> list:
+    """Every recording a MusicBrainz search finds, up to MB_PAGES pages."""
+    out = []
+    for page in range(MB_PAGES):
+        res = _mb("recording", query=query, limit=100, offset=100 * page)
+        out += res.get("recordings") or []
+        if len(out) >= (res.get("count") or 0) or not res.get("recordings"):
+            break
+    return out
+
+
+def song_details(artist: str, title: str, artist_match: float = 0.6) -> Details | None:
+    """The song's original studio release: album, year, genre, length. Without an artist it is
+    the earliest song of that name by anyone, which is rarely the one meant: see resolve().
+    artist_match is how close the recording's artist must be to the one asked for."""
     if not title:
         return None
     # 'The Black Cat Bones' is listed as 'Black Cat Bones' (and the other way round): try both
@@ -170,36 +211,38 @@ def song_details(artist: str, title: str) -> Details | None:
         names.append(artist[4:])
     elif artist:
         names.append("The " + artist)
-    # studio albums first (no compilations, live albums, soundtracks...: classics have hundreds of
-    # recordings and the original can otherwise fall outside the results), then official
-    # albums, then anything
-    studio = (" AND status:official AND primarytype:album AND NOT secondarytype:compilation"
-              " AND NOT secondarytype:live AND NOT secondarytype:soundtrack AND NOT secondarytype:remix"
-              " AND NOT secondarytype:demo")
+    # recordings on an official album first, then anything; the ranking below picks the original.
+    # (Not 'AND NOT secondarytype:compilation' and the like: that drops every recording that is
+    # on any compilation at all, which for a well-known song is the original itself, and leaves
+    # only its demos and live versions.)
     recs = []
     for name in names:
         base = f'recording:"{title}"' + (f' AND artist:"{name}"' if name else "")
-        for q in (base + studio, base + " AND status:official AND primarytype:album", base):
-            recs = _mb("recording", query=q, limit=50).get("recordings") or []
+        for q in (base + " AND status:official AND primarytype:album", base):
+            recs = _recordings(q)
             if recs:
                 break
         if recs:
             break
-    best = None
+    fits = []
     for r in recs:
-        name_s = similar(r.get("title", ""), title)
         credit = (r.get("artist-credit") or [{}])[0].get("name", "")
-        art_s = similar(credit, artist) if artist else 1.0
-        if name_s < 0.8 or art_s < 0.6:
-            continue
-        odd = any(w in (r.get("disambiguation") or "").lower() for w in ("live", "demo", "remix", "edit", "version"))
+        if similar(r.get("title", ""), title) >= 0.8 and (not artist or similar(credit, artist) >= artist_match):
+            fits.append((r, credit))
+    most = max((len(r.get("releases") or []) for r, _ in fits), default=0)
+    best = None
+    for r, credit in fits:
+        odd = _variant(r.get("disambiguation") or "")
         # '(Quadrophonic mix)', '(Remastered)'...: a variant unless the search asked for it
-        tagged = r.get("title", "").strip().lower() != title.strip().lower()
+        tagged = _spelled(r.get("title", "")) != _spelled(title)
+        # the original has been reissued over and over; a recording on a handful of releases
+        # next to one on hundreds is some other take, whatever date it carries
+        rare = len(r.get("releases") or []) * 4 < most
         first = r.get("first-release-date") or "9999"
         for rel in r.get("releases") or []:
             rg = rel.get("release-group") or {}
             # the earliest-released recording (the original), on an official studio album
-            rank = (artist and normalize(credit) != normalize(artist), odd, tagged, first,
+            rank = (bool(artist) and normalize(credit) != normalize(artist), odd, tagged, rare, first,
                     0 if rel.get("status") == "Official" else 1,
                     0 if rg.get("primary-type") == "Album" and not rg.get("secondary-types") else 1,
                     rel.get("date") or "9999")
@@ -209,10 +252,10 @@ def song_details(artist: str, title: str) -> Details | None:
         return None
     _, r, rel, credit = best
     rg = rel.get("release-group") or {}
-    rec_title = r.get("title", title)
+    rec_title = _straight(r.get("title", title))
     if "(" not in title and "[" not in title:
         rec_title = re.sub(r"\s*[\(\[][^\)\]]*[\)\]]\s*$", "", rec_title) or rec_title  # drop '(Quadrophonic mix)'
-    d = Details(rec_title, credit or artist, rel.get("title", ""),
+    d = Details(rec_title, _straight(credit) or artist, rel.get("title", ""),
                 (rel.get("date") or "")[:4], "", (r.get("length") or 0) / 1000.0, rg.get("id", ""))
     try:
         if d.release_group:
@@ -227,13 +270,145 @@ def song_details(artist: str, title: str) -> Details | None:
     return d
 
 
+def lead_artist(artist: str) -> str:
+    """'Peso Pluma, Gabito Ballesteros, Junior H', 'A feat. B', 'A x B' -> the first act named."""
+    first = re.split(r"\s*(?:[,;]|\bfeat\b\.?|\bft\b\.?|\bfeaturing\b|\s[x×]\s)\s*", artist or "", maxsplit=1, flags=re.I)[0]
+    return first.strip() or (artist or "").strip()
+
+
 def lookup(artist: str, title: str) -> Details | None:
-    """Song details for (artist, title), trying the swapped order too ('Song - Artist' names);
-    None when unknown or offline."""
+    """Song details for (artist, title). 'Song - Artist' names are tried the other way round
+    too, so take the names from the result: it has them in the right order. None when unknown
+    or offline, and when there is no artist to go by (resolve() handles that)."""
+    if not artist or not title:
+        return None
     try:
-        return song_details(artist, title) or (song_details(title, artist) if artist else None)
+        d = song_details(artist, title)
+        if not d and lead_artist(artist) != artist:
+            d = song_details(lead_artist(artist), title)
+        # swapped: only on a near-exact artist, or any song that shares its name with a band fits
+        return d or song_details(title, artist, artist_match=0.85)
     except Exception:
         return None
+
+
+# words in a video or file name that are about the upload, not the song
+NOISE = {"official", "video", "audio", "lyrics", "lyric", "hd", "hq", "4k", "music", "feat", "ft", "featuring",
+         "and", "the", "x", "with", "by", "full", "song", "remastered", "remaster", "version", "visualizer",
+         "explicit", "oficial", "clip", "mv"}
+
+
+def _find_words(phrase: list, text: list) -> set | None:
+    """Where each word of phrase is in text (a close spelling counts); None when one is missing."""
+    used = set()
+    for w in phrase:
+        hit = next((i for i, t in enumerate(text) if i not in used and
+                    (t == w or (len(w) > 3 and difflib.SequenceMatcher(None, w, t).ratio() >= 0.8))), None)
+        if hit is None:
+            return None
+        used.add(hit)
+    return used
+
+
+def identify(text: str, seconds: float = 0.0, guess: bool = False) -> tuple[str, str] | None:
+    """(artist, title) of the song a loose name means: 'them changes thundercat', 'Zombie - The
+    Cranberries lyrics', 'Nickleback Rockstar'. Asks Apple's iTunes catalogue, which takes words
+    in any order and lists well-known songs first, and accepts a song only when its title and
+    artist are both in the text with next to nothing left over.
+    A text that is a title and nothing else could be anyone's song: it is accepted only when the
+    song's length matches `seconds`, or when `guess` asks for the best-known song of that name."""
+    plain = re.sub(r"[\(\[].*?[\)\]]", " ", _straight(text))
+    words = normalize(plain).split()
+    if not words:
+        return None
+    q = urllib.parse.urlencode({"term": " ".join(re.sub(r"[-–—|:\"/]+", " ", plain).split()), "entity": "song", "limit": 25})
+    items = _json(f"https://itunes.apple.com/search?{q}").get("results", [])
+    both, alone = [], []
+    for n, it in enumerate(items):
+        name, by = it.get("trackName") or "", it.get("artistName") or ""
+        at = _find_words(normalize(name).split(), words)
+        if not name or not by or at is None:
+            continue
+        rest = [w for i, w in enumerate(words) if i not in at]
+        by_at = _find_words(normalize(lead_artist(by)).split(), rest)
+        if by_at is not None:
+            others = set(normalize(by).split()) | NOISE
+            both.append((sum(1 for i, w in enumerate(rest) if i not in by_at and w not in others), n, by, name))
+        elif not [w for w in rest if w not in NOISE]:
+            length = (it.get("trackTimeMillis") or 0) / 1000.0
+            if guess and not seconds or seconds and length and abs(length - seconds) <= 12:
+                alone.append((n, by, name))
+    if both and min(both)[0] <= 2:
+        _, _, by, name = min(both)
+    elif alone:
+        _, by, name = min(alone)
+    else:
+        return None
+    if "(" not in text and "[" not in text:
+        name = re.sub(r"(\s*[\(\[][^\)\]]*[\)\]])+\s*$", "", name) or name  # 'Song (feat. X) [Remastered]'
+    return _straight(by), _straight(name)
+
+
+def resolve(artist: str, title: str, seconds: float = 0.0, guess: bool = False,
+            hint: str = "") -> tuple[str, str, Details | None]:
+    """The proper (artist, title) and the song's details, from names that may be the wrong way
+    round, misspelt, or missing the artist. `hint` is a name that might be the artist (the
+    channel a video is on); `seconds` and `guess` are for a title with no artist (identify).
+    Names nobody knows come back as given, with no details: never somebody else's album."""
+    d = lookup(artist, title)
+    if not d and not artist and hint:
+        try:
+            d = song_details(hint, title, artist_match=0.85)
+        except Exception:
+            d = None
+    if d:
+        return d.artist, d.title, d
+    try:
+        found = identify(f"{artist} {title}", seconds, guess)
+    except Exception:
+        found = None
+    if not found:
+        return artist, title, None
+    d = lookup(*found)
+    return (d.artist, d.title, d) if d else (*found, None)
+
+
+def is_song(video: str, channel: str, artist: str, title: str) -> bool:
+    """Is a video, going by its title and channel, this song by this artist?"""
+    if not artist or not title:
+        return False
+    words = normalize(_straight(video)).split()
+    at = _find_words(normalize(title).split(), words)
+    if at is None:
+        return False
+    rest = [w for i, w in enumerate(words) if i not in at]
+    return (_find_words(normalize(lead_artist(artist)).split(), rest) is not None
+            or _compact(channel_artist(channel)) == _compact(artist))
+
+
+OTHER_TAKE = re.compile(r"\b(live|remix|acoustic|karaoke|tribute|cover|instrumental|demo|re-?recorded)\b", re.I)
+
+
+def sample(artist: str, title: str) -> dict | None:
+    """A 30-second preview and the album cover of a song, from Apple's iTunes catalogue (which
+    gets the artist and title, nothing else): {"art": cover url, "audio": preview url}. None
+    when iTunes has no song that is clearly this one. Network errors are raised."""
+    q = urllib.parse.urlencode({"term": f"{artist} {title}".strip(), "entity": "song", "limit": 25})
+    best = None
+    for n, it in enumerate(_json(f"https://itunes.apple.com/search?{q}").get("results", [])):
+        name, by, art = it.get("trackName") or "", it.get("artistName") or "", it.get("artworkUrl100") or ""
+        if not it.get("previewUrl") or not art:
+            continue
+        t = similar(name, title)
+        a = max(similar(by, artist), similar(lead_artist(by), lead_artist(artist))) if artist else 1.0
+        if t < 0.8 or a < 0.75:
+            continue
+        # the record itself over live takes, remixes and covers; iTunes lists the best known first
+        other = OTHER_TAKE.search(f"{name} {it.get('collectionName') or ''}") and not OTHER_TAKE.search(title)
+        score = (t + a - (0.5 if other else 0), -n)
+        if best is None or score > best[0]:
+            best = (score, {"art": art.replace("100x100bb", "200x200bb"), "audio": it["previewUrl"]})
+    return best[1] if best else None
 
 
 def cover_art(details: Details, dest: Path) -> Path | None:
@@ -419,22 +594,59 @@ def youtube_search(artist: str, title: str, n: int = 5, expect_seconds: float = 
     return out
 
 
-def video_title(url: str) -> tuple[str, str]:
-    """(title, channel) of a video, without downloading it."""
+def video_info(url: str) -> dict:
+    """A video's title, channel and length in seconds, plus the song ('track') and 'artist'
+    YouTube itself lists for it when it does; nothing is downloaded."""
     import yt_dlp
     with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True, "skip_download": True,
                            "noplaylist": True}) as y:
         info = y.extract_info(url, download=False, process=False)
-    return info.get("title") or "", info.get("channel") or info.get("uploader") or ""
+    artists = info.get("artists") or [info.get("artist") or info.get("creator") or ""]
+    return {"title": info.get("title") or "", "channel": info.get("channel") or info.get("uploader") or "",
+            "seconds": float(info.get("duration") or 0), "track": info.get("track") or "",
+            "artist": lead_artist(artists[0] or "")}
+
+
+def video_title(url: str) -> tuple[str, str]:
+    """(title, channel) of a video, without downloading it."""
+    info = video_info(url)
+    return info["title"], info["channel"]
+
+
+def names_from_info(info: dict) -> tuple[str, str]:
+    """(artist, song) of a video_info: YouTube's own song listing when the video has one, or
+    else a guess from the title and channel."""
+    if info.get("track") and info.get("artist"):
+        return info["artist"], clean_title(info["track"])
+    return names_from_video(info.get("title", ""), info.get("channel", ""))
+
+
+def _upload_tags_off(t: str) -> str:
+    """A video title without what is about the upload: '(Official Video)', '[HD]', '| Lyrics',
+    a trailing 'lyrics'. Every kind of dash between names becomes ' - '; quotes are kept."""
+    t = re.sub(r"\s+(?:[–—―~]|-{2,}|//)\s+", " - ", _straight(t))
+    t = re.sub(r"[\(\[][^\)\]]*(official|oficial|video|audio|lyric|letra|remaster|hd|hq|4k|visuali[sz]er|explicit)"
+               r"[^\)\]]*[\)\]]", "", t, flags=re.I)
+    t = re.sub(r"\[[^\]]*\]", "", t)  # [album], [HD]...: square brackets are never the song's name
+    t = re.split(r"\s[|•]\s", t)[0]
+    t = re.sub(r"(?:\s+-)?(?:\s+(?:with|official|music|lyrics?|hd|hq))*\s+(?:video|audio|lyrics|hd|hq)\s*$", "", t, flags=re.I)
+    return " ".join(t.split())
 
 
 def clean_title(t: str) -> str:
     """Video title -> song name: drop '(Official Video)', '[HD]', '| Lyrics' and similar."""
-    t = re.sub(r"[\(\[][^\)\]]*(official|video|audio|lyric|remaster|hd|hq|4k|visuali[sz]er|explicit)[^\)\]]*[\)\]]",
-               "", t, flags=re.I)
-    t = re.sub(r"\[[^\]]*\]", "", t)  # [album], [HD]...: square brackets are never the song's name
-    t = re.split(r"\s[|•]\s", t)[0]
-    return " ".join(t.replace('"', "").split())
+    return " ".join(_upload_tags_off(t).replace('"', "").split())
+
+
+def _compact(s: str) -> str:
+    return normalize(s).replace(" ", "")
+
+
+def channel_artist(channel: str) -> str:
+    """The act a channel is named after, if it is one: 'Weezer - Topic', 'TheKillersVEVO',
+    'Tame Impala Official' -> 'Weezer', 'TheKillers', 'Tame Impala'."""
+    c = (channel or "").removesuffix(" - Topic").strip()
+    return re.sub(r"(?i)(\s*vevo|\s+official|\s+music|\s+band|\s+tv)+$", "", c).strip() or c
 
 
 def names_from_file(stem: str) -> tuple[str, str]:
@@ -451,12 +663,23 @@ def names_from_file(stem: str) -> tuple[str, str]:
 
 def names_from_video(title: str, channel: str) -> tuple[str, str]:
     """(artist, song) guessed from a video's title and channel."""
-    a, t = parse_query(clean_title(title))
-    artist = channel.removesuffix(" - Topic").strip()
-    if a and artist and similar(t, artist) > 0.8 and similar(a, artist) < 0.5:
+    raw = _upload_tags_off(title)
+    artist = channel_artist(channel)
+    quoted = re.match(r'^(.+?)\s*[-:]?\s*"([^"]{2,})"$', raw)  # Band "Song", Band - "Song"
+    if quoted and " - " not in quoted.group(1):
+        a, t = quoted.group(1).strip(), quoted.group(2).strip()
+    else:
+        a, t = parse_query(raw.replace('"', ""))
+    if len(t) > 2 and t[0] == t[-1] == "'":
+        t = t[1:-1].strip()  # 'Song' in single quotes; not the end of Free Fallin'
+    if a and artist and _compact(t) == _compact(artist) and _compact(a) != _compact(artist):
         a, t = t, a  # 'Song - Artist' (reversed), told apart by the artist's own channel
-    if not a and artist and normalize(t).startswith(normalize(artist) + " "):
-        a, t = artist, t[len(artist):].strip(" -:")  # 'Band "Song"' from the band's own channel
+    if not a and artist:  # 'Band Song' from the band's own channel
+        parts = t.split()
+        for n in range(1, min(len(parts), 6)):
+            if _compact(" ".join(parts[:n])) == _compact(artist):
+                a, t = " ".join(parts[:n]), " ".join(parts[n:]).strip(" -:")
+                break
     if not a and channel.endswith(" - Topic"):
         a = artist  # Topic uploads are titled with the song alone
     return a, t

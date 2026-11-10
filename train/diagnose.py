@@ -89,7 +89,7 @@ def main():
                 continue
             sid = data.song_id(s)
             paths = {"clean": data.V3 / "feats" / f"{sid}_clean_{fkind}.npy",
-                     "demucs": data.V3 / "feats" / f"{sid}_ft_{fkind}.npy"}
+                     "demucs": data.V3 / "feats" / f"{sid}_{ml._meta[inst]['stems']}_{fkind}.npy"}
             mid = Path(s["folder"]) / "notes.mid"
             if not all(p.exists() for p in paths.values()) or not mid.exists():
                 continue  # also skips songs renamed or removed from the library since indexing

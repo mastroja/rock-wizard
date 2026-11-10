@@ -25,6 +25,112 @@ function toast(msg) {
   toastTimer = setTimeout(() => t.remove(), 4200);
 }
 
+// ---------- song previews: a 30-second clip behind each cover, one playing at a time ----------
+const player = new Audio();
+let playingBtn = null;
+function stopPreview() {
+  player.pause();
+  if (playingBtn) { playingBtn.classList.remove("playing", "loading"); playingBtn = null; }
+  $$(".embed").forEach((e) => e.remove());
+  $$(".vthumb.on").forEach((e) => e.classList.remove("on"));
+}
+player.onended = stopPreview;
+player.onplaying = () => { if (playingBtn) { playingBtn.classList.remove("loading"); playingBtn.classList.add("playing"); } };
+player.onerror = () => { if (playingBtn) { toast("That preview wouldn't play"); stopPreview(); } };
+const PLAY_SVG = `<svg class="i-play" viewBox="0 0 24 24"><path d="M8.5 5.5v13l10.5-6.5z"/></svg>`;
+// A cover with a play button over it. With no clip known yet it is a plain picture; setSample adds the rest.
+const artHTML = (s) => `<button class="art${s.audio ? "" : " none"}" data-audio="${esc(s.audio || "")}" aria-label="Play a preview">
+  ${s.art ? `<img src="${esc(s.art)}" alt="" loading="lazy">` : `<span class="ph">${esc((s.title || "?").trim()[0].toUpperCase())}</span>`}
+  <span class="pp">${PLAY_SVG}<span class="spinner"></span><span class="eq"><i></i><i></i><i></i></span></span></button>`;
+function setSample(btn, m) {
+  if (!m || !m.audio || !btn || !btn.isConnected) return false;
+  btn.dataset.audio = m.audio;
+  btn.classList.remove("none");
+  const ph = $(".ph", btn);
+  if (ph) ph.outerHTML = `<img src="${esc(m.art)}" alt="">`;
+  return true;
+}
+async function fillSample(btn, artist, title) {
+  try { return setSample(btn, await api("/api/sample?" + qs({ artist, title }))); } catch (e) { return false; }
+}
+document.addEventListener("click", (e) => {
+  const a = e.target.closest(".art");
+  if (!a || !a.dataset.audio) return;
+  const mine = playingBtn === a;
+  stopPreview();
+  if (mine) return;
+  playingBtn = a; a.classList.add("loading");
+  player.src = a.dataset.audio;
+  player.play().catch(() => {});
+});
+
+function confetti() {
+  const colors = ["#8b5cff", "#d54cff", "#ff4ca8", "#35d08b", "#ffb547", "#eef0ff"];
+  const box = document.createElement("div"); box.className = "confetti";
+  box.innerHTML = Array.from({ length: 70 }, (_, i) => `<i style="left:${Math.random() * 100}%;background:${colors[i % colors.length]};--dx:${Math.round(Math.random() * 240 - 120)}px;--r:${Math.round(Math.random() * 900 - 450)}deg;animation-delay:${(Math.random() * 0.35).toFixed(2)}s;animation-duration:${(1.6 + Math.random() * 1.2).toFixed(2)}s"></i>`).join("");
+  document.body.append(box);
+  setTimeout(() => box.remove(), 3400);
+}
+
+// ---------- the Taylor Swift checkpoint (a household joke) ----------
+// One popup at a time; resolves with the typed answer when there is a field, else with "".
+function popup(title, text, button, field = false, alarm = false) {
+  return new Promise((done) => {
+    const scrim = document.createElement("div"); scrim.className = "scrim pop";
+    const m = document.createElement("div"); m.className = "modal card pop" + (alarm ? " alarm" : "");
+    m.innerHTML = `<h2 style="margin-top:0">${esc(title)}</h2><p>${esc(text)}</p>
+      ${field ? `<input id="pop-in" type="text" maxlength="40" placeholder="Your answer" autocomplete="off" style="width:100%">` : ""}
+      <div class="row" style="margin-top:14px;justify-content:flex-end"><button class="btn primary" id="pop-ok">${esc(button)}</button></div>`;
+    document.body.append(scrim, m);
+    const inp = $("#pop-in", m);
+    const close = () => { scrim.remove(); m.remove(); done(inp ? inp.value : ""); };
+    $("#pop-ok", m).onclick = close;
+    if (inp) { inp.focus(); inp.onkeydown = (e) => { if (e.key === "Enter") close(); }; } else $("#pop-ok", m).focus();
+  });
+}
+
+const SWIFT_QUIZ = [
+  ["What is 7 × 8?", ["56"]],
+  ["What is 12 + 19?", ["31"]],
+  ["What is 100 − 37?", ["63"]],
+  ["What is half of 90?", ["45"]],
+  ["How many strings does a standard guitar have?", ["6", "six"]],
+  ["How many sides does a hexagon have?", ["6", "six"]],
+  ["How many days are in a leap year?", ["366"]],
+  ["What colour do you get by mixing blue and yellow?", ["green"]],
+];
+const SWIFT_FAILS = [
+  "Looks like you'll just have to Shake It Off.",
+  "This chart is staying a Blank Space.",
+  "You and this chart are Never Ever Getting Back Together.",
+  "There's some Bad Blood between you and that question.",
+  "You Need to Calm Down and pick a different artist.",
+];
+const pick = (list) => list[Math.floor(Math.random() * list.length)];
+const isSwift = (artist) => /taylor\s*swift/i.test(artist || "");  // same rule as GUARDED_ARTISTS in the server
+
+// True when the song may be charted after all.
+async function swiftGate(artist, title) {
+  await popup("Warning", "RockWizard has reached max capacity for songs by this artist (Taylor Swift). Proceed with absolute caution.", "Proceed with caution", false, true);
+  await popup("Consent required", `Before continuing please get the express written consent of your admin (Jacob Mastroianni) to proceed with the charting of this song [${title || "this song"} - ${artist || "Taylor Swift"}].`, "I have consent");
+  await popup("Ok seriously Claire", "You really don't need any more T Swift.", "But I do");
+  const [question, answers] = pick(SWIFT_QUIZ);
+  const answer = (await popup("Final check", `Answer correctly to chart this song. ${question}`, "Submit", true)).trim().toLowerCase().replace(/[.!]+$/, "");
+  if (answers.includes(answer)) return true;
+  await popup("Charting failed", `Wrong answer. ${pick(SWIFT_FAILS)}`, "Fine", false, true);
+  return false;
+}
+
+// Adds a song to the queue; null when the checkpoint above turned it away.
+async function startChart(body) {
+  let job = await post("/api/jobs/convert", body);
+  if (job.gate) {
+    if (!(await swiftGate(job.artist, job.title))) return null;
+    job = await post("/api/jobs/convert", { ...body, cleared: true });
+  }
+  return job;
+}
+
 // ---------- icons (24px line icons) ----------
 const P = (d) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
 const ICON = {
@@ -69,7 +175,7 @@ document.addEventListener("click", (e) => {
   const go = e.target.closest("[data-go]");
   if (go) { location.hash = go.dataset.go; }
 });
-window.addEventListener("hashchange", () => { closeDrawer(); renderNav(); render(); });
+window.addEventListener("hashchange", () => { closeDrawer(); stopPreview(); renderNav(); render(); });
 
 function statusPills() {
   const st = S.status || {};
@@ -96,13 +202,20 @@ async function refresh() {
   try {
     const [jobs, status] = await Promise.all([api("/api/jobs"), api("/api/status")]);
     const before = JSON.stringify(S.jobs.map((j) => [j.id, j.status, j.step, Math.round(j.progress * 50)]));
+    const was = Object.fromEntries(S.jobs.map((j) => [j.id, j.status]));
+    const finished = jobs.filter((j) => j.status === "done" && ["running", "queued"].includes(was[j.id]));
+    if (finished.length) { confetti(); toast(`${finished[0].title} is ready to check`); }
     S.jobs = jobs; S.status = status;
     renderNav(); statusPills();
     if (view() === "queue" && before !== JSON.stringify(jobs.map((j) => [j.id, j.status, j.step, Math.round(j.progress * 50)]))) renderQueue();
   } catch (e) { /* server restarting */ }
 }
 
+let lastPage = "";
 function page(title, sub, body, actions = "") {
+  // the entrance animation plays when the screen changes, not each time the same one is redrawn
+  $("#main").classList.toggle("enter", lastPage !== title);
+  lastPage = title;
   $("#main").innerHTML = `<div class="top"><div><h1>${title}</h1>${sub ? `<p class="sub">${sub}</p>` : ""}</div><div class="row">${actions}</div></div>${body}`;
 }
 const render = () => ((!owner() && view() === "library" ? renderCreate : { create: renderCreate, queue: renderQueue, staging: renderStaging, live: renderLive, library: renderLibrary, settings: renderSettings }[view()]) || renderCreate)();
@@ -135,8 +248,8 @@ function renderCreate() {
       <div id="results"></div>
     </div>
     <div class="card">
-      <div class="row spread"><h2 style="margin:0">Suggested songs</h2><button class="btn small" id="sgmore">Shuffle</button></div>
-      <p class="faint" style="margin:4px 0 12px">Picked by hand for how they should play. Anything already in your library is left out.</p>
+      <div class="row spread"><h2 style="margin:0">Suggested songs</h2><button class="btn small" id="sgmore">Show me more</button></div>
+      <p class="faint" style="margin:4px 0 12px">Picked by hand for how they should play. Tap a cover to hear the song. Anything already in your library is left out.</p>
       <div id="suggest"><div class="empty"><span class="spinner"></span></div></div>
     </div>
     <div class="card desktop-only" id="batchcard">
@@ -160,7 +273,9 @@ function renderCreate() {
   loadSuggestions();
 }
 
-let suggestGroup = "All";
+let suggestGroup = "All", suggestRun = 0;
+const sgKey = (s) => `${s.artist}|${s.title}`;
+function sgSeen() { try { return JSON.parse(localStorage.getItem("sg_seen")) || {}; } catch (e) { return {}; } }
 async function loadSuggestions() {
   const box = $("#suggest");
   let songs;
@@ -170,13 +285,18 @@ async function loadSuggestions() {
   if (!groups.includes(suggestGroup)) suggestGroup = "All";
   box.innerHTML = `<div class="tabs" style="margin-bottom:10px">${groups.map((g) => `<button data-sg="${esc(g)}">${esc(g)}</button>`).join("")}</div><div id="sglist"></div>`;
   const draw = () => {
+    stopPreview();
     $$("[data-sg]", box).forEach((b) => b.classList.toggle("on", b.dataset.sg === suggestGroup));
     const pool = songs.filter((s) => suggestGroup === "All" || s.group === suggestGroup);
+    // the songs shown longest ago come first, so every pick gets its turn before any comes round again
+    const seen = sgSeen(), turn = Math.max(0, ...Object.values(seen)) + 1;
+    const order = pool.map((s) => [seen[sgKey(s)] || 0, Math.random(), s]).sort((a, b) => a[0] - b[0] || a[1] - b[1]);
     const shown = [], artists = new Set();
-    for (const s of [...pool].sort(() => Math.random() - 0.5)) {  // one song per artist each time
-      if (shown.length < 8 && !artists.has(s.artist)) { artists.add(s.artist); shown.push(s); }
+    for (const [, , s] of order) {  // one song per artist each time
+      if (shown.length < 8 && !artists.has(s.artist)) { artists.add(s.artist); shown.push(s); seen[sgKey(s)] = turn; }
     }
-    $("#sglist", box).innerHTML = shown.map((s, i) => `<div class="result"><div class="grow"><div class="ellipsis"><b>${esc(s.artist)} – ${esc(s.title)}</b></div>
+    try { localStorage.setItem("sg_seen", JSON.stringify(seen)); } catch (e) { /* not kept */ }
+    $("#sglist", box).innerHTML = shown.map((s, i) => `<div class="result">${artHTML(s)}<div class="grow"><div class="ellipsis"><b>${esc(s.artist)} – ${esc(s.title)}</b></div>
       <div class="faint ellipsis">${esc(s.why)}</div></div><button class="btn small" data-find="${i}">Find it</button></div>`).join("") || `<p class="faint">You already have every song in this group.</p>`;
     $$("[data-find]", box).forEach((b) => b.onclick = () => {
       const s = shown[b.dataset.find];
@@ -184,6 +304,18 @@ async function loadSuggestions() {
       $("#q").scrollIntoView({ behavior: "smooth", block: "center" });
       doSearch();
     });
+    // covers and clips not fetched yet, one at a time (the PC may only ask for a few a minute)
+    const run = ++suggestRun, arts = $$(".art", box);
+    (async () => {
+      for (const [i, s] of shown.entries()) {
+        if (s.sampled) continue;
+        if (run !== suggestRun || !box.isConnected) return;
+        let m = null;
+        try { m = await api("/api/sample?" + qs({ artist: s.artist, title: s.title })); } catch (e) { continue; }
+        Object.assign(s, m, { sampled: true });
+        if (run === suggestRun) setSample(arts[i], m);
+      }
+    })();
   };
   $$("[data-sg]", box).forEach((b) => b.onclick = () => { suggestGroup = b.dataset.sg; draw(); });
   $("#sgmore").onclick = draw;
@@ -202,6 +334,7 @@ function pending(f) {
     </div>
     <button class="btn primary big" id="make">${ICON.rocket} Make my chart</button>`;
   $("#make").onclick = async () => {
+    if (isSwift($("#pa").value) && !(await swiftGate($("#pa").value, $("#pt").value))) return;
     const fd = new FormData();
     fd.append("file", f); fd.append("artist", $("#pa").value); fd.append("title", $("#pt").value);
     $("#make").disabled = true; $("#make").innerHTML = `<span class="spinner"></span> Uploading…`;
@@ -219,17 +352,20 @@ async function doSearch() {
   const q = $("#q").value.trim();
   if (!q) return;
   const out = $("#results");
+  stopPreview();
   if (/^https?:\/\//.test(q)) {
-    try { await post("/api/jobs/convert", { url: q }); toast("Added to the queue"); location.hash = "queue"; }
+    try { if (await startChart({ url: q })) { toast("Added to the queue"); location.hash = "queue"; } }
     catch (e) { toast(`Couldn't start it: ${e.message}`); }
     return;
   }
   out.innerHTML = `<div class="empty"><span class="spinner"></span><div>Searching charts, song details and YouTube…</div></div>`;
   try {
     const r = await api("/api/search?" + qs({ q }));
-    const d = r.details;
+    const d = r.details, song = d || r.song || {};
     out.innerHTML = `
-      ${d ? `<p class="muted" style="margin:14px 0 4px">${esc(d.artist)} – <b style="color:var(--text)">${esc(d.title)}</b> · ${esc([d.album, d.year, d.genre].filter(Boolean).join(" · "))}</p>` : ""}
+      ${song.title ? `<div class="result songcard">${artHTML(song)}<div class="grow"><div class="ellipsis"><b>${esc(song.title)}</b></div>
+        <div class="muted ellipsis">${esc([song.artist, d && d.album, d && d.year, d && d.genre].filter(Boolean).join(" · "))}</div>
+        <div class="faint" id="clipnote">Finding a clip…</div></div></div>` : ""}
       ${r.errors.length ? `<p class="chip yellow">${esc(r.errors.join("; "))}</p>` : ""}
       <h2 style="margin-top:16px">Already charted by the community</h2>
       ${r.charts.length ? r.charts.map((c, i) => `
@@ -238,12 +374,24 @@ async function doSearch() {
           <button class="btn small" data-chart="${i}">Download</button></div>`).join("")
         : `<p class="faint">No human-made chart found, so making one is the way to go.</p>`}
       <h2 style="margin-top:16px">Make a chart from YouTube</h2>
+      ${r.videos.length ? `<p class="faint" style="margin:-6px 0 6px">Tap a picture to hear that upload before you chart it.</p>` : ""}
       ${r.videos.map((v, i) => `
         <div class="result">
-          <img class="thumb" src="https://i.ytimg.com/vi/${esc(ytId(v.url))}/mqdefault.jpg" alt="" loading="lazy">
+          <button class="vthumb" data-pv="${i}" aria-label="Play this video"><img class="thumb" src="https://i.ytimg.com/vi/${esc(ytId(v.url))}/mqdefault.jpg" alt="" loading="lazy"><span class="pp">${PLAY_SVG}</span></button>
           <div class="grow"><div class="ellipsis"><b>${esc(v.title)}</b></div>
             <div class="faint">${esc(v.channel)} · ${mmss(v.seconds)} ${v.best ? `<span class="chip green">Best match</span>` : ""}</div></div>
           <button class="btn primary small" data-video="${i}">Chart this</button></div>`).join("") || `<p class="faint">No videos found.</p>`}`;
+    if (song.title) fillSample($(".songcard .art", out), song.artist || "", song.title).then((ok) => {
+      const note = $("#clipnote", out);
+      if (note) note.textContent = ok ? "Tap the cover for a 30-second clip, to check it's the right song." : "No clip found for this one.";
+    });
+    $$("[data-pv]", out).forEach((b) => b.onclick = () => {
+      const row = b.closest(".result"), open = b.classList.contains("on");
+      stopPreview();
+      if (open) return;
+      b.classList.add("on");
+      row.insertAdjacentHTML("afterend", `<div class="embed"><iframe src="https://www.youtube-nocookie.com/embed/${encodeURIComponent(ytId(r.videos[b.dataset.pv].url))}?autoplay=1" allow="autoplay; encrypted-media; fullscreen" referrerpolicy="strict-origin-when-cross-origin"></iframe></div>`);
+    });
     $$("[data-chart]", out).forEach((b) => b.onclick = async () => {
       const c = r.charts[b.dataset.chart];
       b.disabled = true; b.innerHTML = `<span class="spinner"></span>`;
@@ -254,8 +402,8 @@ async function doSearch() {
       const v = r.videos[b.dataset.video];
       b.disabled = true; b.innerHTML = `<span class="spinner"></span>`;
       try {
-        await post("/api/jobs/convert", { url: v.url, artist: v.artist, title: v.song });
-        toast(`Charting ${v.artist} – ${v.song}`); location.hash = "queue";
+        if (await startChart({ url: v.url, artist: v.artist, title: v.song })) { toast(`Charting ${v.artist} – ${v.song}`); location.hash = "queue"; }
+        else { b.disabled = false; b.textContent = "Chart this"; }
       } catch (e) { toast(`Couldn't start it: ${e.message}`); b.disabled = false; b.textContent = "Chart this"; }
     });
   } catch (e) { out.innerHTML = `<p class="chip red">${esc(e.message)}</p>`; }
@@ -280,10 +428,9 @@ async function pickBatch() {
     for (const row of rows) {
       if (!$(".bf", row).checked) continue;
       const f = r.files[$(".bf", row).dataset.i];
-      await post("/api/jobs/convert", { path: f.path, artist: $(".ba", row).value, title: $(".bt", row).value });
-      n++;
+      if (await startChart({ path: f.path, artist: $(".ba", row).value, title: $(".bt", row).value })) n++;
     }
-    toast(`${n} songs added to the queue`); location.hash = "queue";
+    toast(`${n} songs added to the queue`); if (n) location.hash = "queue";
   };
 }
 
@@ -291,6 +438,7 @@ async function pickBatch() {
 const STATUS_CHIP = { queued: ["", "Waiting"], running: ["accent", "Working"], done: ["green", "Done"], failed: ["red", "Failed"], cancelled: ["", "Cancelled"] };
 const VERDICT = { green: ["green", "Looks good"], yellow: ["yellow", "Check flagged spots"], red: ["red", "Has problems"] };
 
+const barAt = {};  // where each job's progress bar stood at the last draw
 function renderQueue() {
   const jobs = S.jobs;
   page("Queue", "Songs being made, one at a time on your PC's graphics card.",
@@ -302,7 +450,7 @@ function renderQueue() {
         <div class="row spread"><div class="grow"><b class="ellipsis" style="display:block">${esc(j.title)}</b>
           <div class="faint">${{ update: "Updating chart · ", rechart: "Recharting · " }[j.kind] || ""}${esc(step)}${j.by ? ` · from ${esc(j.by)}` : ""}</div></div>
           <span class="chip ${cc}">${ct}</span></div>
-        ${j.status === "running" || j.status === "queued" ? `<div class="bar" style="margin-top:12px"><i style="width:${Math.round(j.progress * 100)}%"></i></div>` : ""}
+        ${j.status === "running" || j.status === "queued" ? `<div class="bar" style="margin-top:12px"><i data-bar="${j.id}" data-to="${Math.round(j.progress * 100)}" style="width:${barAt[j.id] ?? 0}%"></i></div>` : ""}
         <div class="row" style="margin-top:12px">
           ${v ? `<span class="chip ${v[0]}">${v[1]}</span>` : ""}<span class="grow"></span>
           ${(j.status === "running" || j.status === "queued") && (owner() || j.by === S.me.name) ? `<button class="btn small" data-cancel="${j.id}">Cancel</button>` : ""}
@@ -310,6 +458,10 @@ function renderQueue() {
         </div></div>`;
     }).join("")}</div>` : `<div class="card empty">Nothing in the queue. Make a chart from the Create tab.</div>`,
     owner() && jobs.some((j) => ["done", "failed", "cancelled"].includes(j.status)) ? `<button class="btn" id="clear">Clear finished</button>` : "");
+  $$("[data-bar]").forEach((i) => {
+    barAt[i.dataset.bar] = Number(i.dataset.to);
+    requestAnimationFrame(() => requestAnimationFrame(() => { i.style.width = i.dataset.to + "%"; }));
+  });
   $$("[data-cancel]").forEach((b) => b.onclick = async () => { await post(`/api/jobs/${b.dataset.cancel}/cancel`); refresh(); });
   $$("[data-review]").forEach((b) => b.onclick = () => openReview(b.dataset.review));
   const c = $("#clear"); if (c) c.onclick = async () => { await post("/api/jobs/clear"); refresh().then(renderQueue); };

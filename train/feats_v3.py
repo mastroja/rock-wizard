@@ -1,6 +1,6 @@
 """python -m train.feats_v3 [kinds] : cache note-model features for the v3 layout from
-(a) each song's own isolated stems ('clean') and (b) the Demucs stems kept by separate_v3
-('ft', 's6'). Resumable; runs in minutes per hundred songs, so feature ideas are cheap to try."""
+(a) each song's own isolated stems ('clean') and (b) the separated stems kept by separate_v3
+('ft', 's6') and separate_sw ('sw'). Resumable; runs in minutes per hundred songs, so feature ideas are cheap to try."""
 import sys
 from concurrent.futures import ThreadPoolExecutor
 
@@ -17,7 +17,8 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 # Demucs stem file -> (source tag, instrument, sample rate); a kind uses the stems at its rate
 DM = {"ft_other": ("ft", "guitar", features.SR), "ft_bass": ("ft", "bass", features.SR),
       "ft_drums": ("ft", "drums", features.SR), "s6_guitar": ("s6", "guitar", features.SR),
-      "ft_drums44": ("ft", "drums", 44100)}
+      "ft_drums44": ("ft", "drums", 44100),
+      "sw_guitar": ("sw", "guitar", features.SR), "sw_bass": ("sw", "bass", features.SR)}
 
 
 def jobs_for(song, kinds):

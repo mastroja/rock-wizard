@@ -26,7 +26,7 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import feedback, library, ml, pipeline, rechart, review, search, startup, suggest, tidy
+from . import feedback, library, ml, pipeline, rechart, review, samples, search, startup, suggest, tidy
 
 ROOT = Path(__file__).resolve().parent.parent
 WEB = ROOT / "web"
@@ -106,6 +106,7 @@ jobs: dict[str, Job] = {}
 job_queue: "queue.Queue[str]" = queue.Queue()
 stops: dict[str, threading.Event] = {}
 CONVERT_STEPS = ["Downloading the song"] + pipeline.STEPS
+GUARDED_ARTISTS = ("taylor swift",)  # charting these takes four popups and a quiz (web/app.js swiftGate)
 
 
 def add_job(kind, label, steps, by="", **args) -> Job:
@@ -134,9 +135,9 @@ def run_convert(j: Job, stop: threading.Event):
             src = search.youtube_download(a["url"], tmp, lambda f: setattr(j, "progress", 0.12 * f), stop)
             offset = 1
         artist, title = a.get("artist", ""), a.get("title", "") or Path(src).stem
-        details = search.lookup(artist, title)
-        if details and search.similar(details.title, title) >= 0.8:
-            artist, title = details.artist, details.title  # proper spelling, fixes swapped names
+        # proper spelling, names the right way round, and the album only of a song that matches
+        artist, title, details = search.resolve(artist, title, seconds=a.get("seconds") or 0,
+                                                hint=a.get("channel") or "")
         j.title = f"{artist + ' - ' if artist else ''}{title}"
         cover = search.cover_art(details, tmp / "cover.jpg") if details else None
         start = 0.12 if a.get("url") else 0.0
@@ -146,7 +147,7 @@ def run_convert(j: Job, stop: threading.Event):
 
         def on_progress(f):
             j.progress = start + (1 - start) * f
-        res = pipeline.make_song(Path(src), artist, title, staging_dir(), charter=cfg.get("charter", ""),
+        res = pipeline.make_song(Path(src), artist, title, staging_dir(), charter=a.get("charter") or cfg.get("charter", ""),
                                  on_step=on_step, on_progress=on_progress, stop=stop,
                                  details=details, cover=cover)
         shutil.rmtree(res.preview_dir, ignore_errors=True)
@@ -224,6 +225,13 @@ def added_by(request: Request) -> str:
     """The friend's name to tag new songs with, or "" for the owner."""
     d = device_of(request)
     return "" if d is None or d.get("owner") else (d.get("name") or "a friend")
+
+
+def charter_of(request: Request) -> str:
+    """The "charted by" name for a song this request adds to the queue: the device's name, or
+    the name in Settings on the PC itself (and for a device that has no name yet)."""
+    d = device_of(request)
+    return (d.get("name") if d else "") or cfg.get("charter", "")
 
 
 def rater(request: Request) -> str:
@@ -369,7 +377,7 @@ async def job_upload(request: Request, file: UploadFile = File(...), artist: str
         shutil.copyfileobj(file.file, f)
     a, t = search.names_from_file(up.stem)
     j = add_job("convert", f"{artist or a} - {title or t}".strip(" -"), CONVERT_STEPS[1:], by=added_by(request),
-                path=str(up), artist=artist or a, title=title or t)
+                path=str(up), artist=artist or a, title=title or t, charter=charter_of(request))
     return public(j)
 
 
@@ -377,11 +385,16 @@ async def job_upload(request: Request, file: UploadFile = File(...), artist: str
 async def job_convert(req: Request):
     """{path} for a file on this PC, or {url} for YouTube; optional artist/title."""
     b = await req.json()
+    extra = {}
     if b.get("url"):
         steps = CONVERT_STEPS
         if not b.get("title"):  # a pasted link: names from the video's title and channel
             try:
-                b["artist"], b["title"] = search.names_from_video(*search.video_title(b["url"]))
+                info = search.video_info(b["url"])
+                b["artist"], b["title"] = search.names_from_info(info)
+                # for a title with no artist: the channel may be the artist, and the length
+                # tells the well-known song of that name from the rest
+                extra = {"seconds": info["seconds"], "channel": search.channel_artist(info["channel"])}
             except Exception:
                 pass
     else:
@@ -391,9 +404,13 @@ async def job_convert(req: Request):
         steps = CONVERT_STEPS[1:]
         if not b.get("title"):
             b["artist"], b["title"] = search.names_from_file(Path(b["path"]).stem)
+    # a household joke: these artists need the app's popups answered first ("cleared")
+    who = f"{b.get('artist', '')} {extra.get('channel', '')}".lower()
+    if not b.get("cleared") and any(name in who for name in GUARDED_ARTISTS):
+        return {"gate": "swift", "artist": b.get("artist") or extra.get("channel", ""), "title": b.get("title", "")}
     j = add_job("convert", f"{b.get('artist', '')} - {b.get('title', '')}".strip(" -") or "YouTube song",
                 steps, by=added_by(req), path=b.get("path"), url=b.get("url"), artist=b.get("artist", ""),
-                title=b.get("title", ""))
+                title=b.get("title", ""), charter=charter_of(req), **extra)
     return public(j)
 
 
@@ -465,27 +482,37 @@ def scoreboard():
 
 @app.get("/api/suggestions")
 def suggestions():
-    return {"songs": suggest.picks(staging_dir(), live_dir())}
+    """The picks, each with its cover and preview clip when already known ("sampled": asked for)."""
+    songs = suggest.picks(staging_dir(), live_dir())
+    samples.warm([(s["artist"], s["title"]) for s in songs])
+    known = [samples.cached(s["artist"], s["title"]) for s in songs]
+    return {"songs": [s | {"sampled": k is not None} | (k or {}) for s, k in zip(songs, known)]}
+
+
+@app.get("/api/sample")
+def sample(artist: str = "", title: str = ""):
+    """{"art", "audio"}: the album cover and a 30-second clip of a song, or {} when there is none."""
+    return samples.get(artist, title) if title.strip() else {}
 
 
 @app.get("/api/search")
 def do_search(q: str):
-    artist, title = search.parse_query(q)
     out = {"charts": [], "details": None, "videos": [], "errors": []}
+    # first of all which song is meant: 'song - artist', 'artist song' and a title alone all work
+    artist, title, d = search.resolve(*search.parse_query(q), guess=True)
+    out["song"] = {"artist": artist, "title": title}
     try:
         out["charts"] = [asdict(c) | {"download_url": c.download_url} for c in search.community_charts(artist, title)]
     except Exception as e:
         out["errors"].append(f"chart search ({e.__class__.__name__})")
-    d = search.lookup(artist, title)
     if d:
         out["details"] = asdict(d)
-        artist = artist or d.artist
     try:
         vids = search.youtube_search(artist, title, expect_seconds=d.seconds if d else 0)
         for v in vids:
             va, vt = search.names_from_video(v.title, v.channel)
-            if d and search.similar(d.title, vt) >= 0.8:
-                va, vt = d.artist, d.title
+            if search.is_song(v.title, v.channel, artist, title) or (d and search.similar(d.title, vt) >= 0.8):
+                va, vt = artist, title  # the song searched for, whatever way round the video names it
             out["videos"].append(asdict(v) | {"artist": va or artist, "song": vt or title})
     except Exception as e:
         out["errors"].append(f"YouTube search ({e.__class__.__name__}; try Settings, Update downloader)")
