@@ -80,20 +80,87 @@ function confetti() {
   setTimeout(() => box.remove(), 3400);
 }
 
-// ---------- the Taylor Swift checkpoint (a household joke) ----------
-// One popup at a time; resolves with the typed answer when there is a field, else with "".
-function popup(title, text, button, field = false, alarm = false) {
+// ---------- the Taylor Swift checkpoint (a household joke, dressed up as a system error) ----------
+// The sound: this PC's own Windows error sound when the server can hand it over, or else a buzz
+// made here. Browsers only allow sound after a tap, so armErrorSound runs inside the tap itself.
+let errCtx = null, errBuf = null;
+function armErrorSound() {
+  try {
+    errCtx = errCtx || new (window.AudioContext || window.webkitAudioContext)();
+    if (errCtx.state === "suspended") errCtx.resume();
+  } catch (e) { /* no sound on this device */ }
+}
+async function loadErrorSound() {
+  if (errBuf || !errCtx) return;
+  try { errBuf = await errCtx.decodeAudioData(await (await fetch("/api/errorsound")).arrayBuffer()); } catch (e) { /* the buzz plays instead */ }
+}
+function errorSound() {
+  if (!errCtx) return;
+  try {
+    if (errBuf) { const src = errCtx.createBufferSource(); src.buffer = errBuf; src.connect(errCtx.destination); src.start(); return; }
+    const t = errCtx.currentTime;
+    [[330, 0], [220, 0.16]].forEach(([hz, at]) => {  // two falling buzzes
+      const o = errCtx.createOscillator(), g = errCtx.createGain();
+      o.type = "square"; o.frequency.value = hz;
+      g.gain.setValueAtTime(0.12, t + at); g.gain.exponentialRampToValueAtTime(0.001, t + at + 0.22);
+      o.connect(g).connect(errCtx.destination); o.start(t + at); o.stop(t + at + 0.24);
+    });
+  } catch (e) { /* no sound */ }
+}
+
+const TAUNTS = ["Nope", "Too slow", "Missed", "So close", "Not today"];
+// One fake error box at a time; resolves with the typed answer when there is a field, else with "".
+// `level` 1-3 is how badly it glitches, `dodges` how many times the button jumps away before it can be pressed.
+function errorBox({ title, text, button, code, field = false, level = 1, dodges = 0 }) {
   return new Promise((done) => {
+    const inner = `<div class="sys-bar"><span>RockWizard.exe - System Error</span><button class="sys-x" aria-label="Close">&#10005;</button></div>
+      <div class="sys-body"><div class="sys-icon">&#10005;</div><div class="grow">
+        <h2 class="glitch" data-text="${esc(title)}">${esc(title)}</h2><p>${esc(text)}</p>
+        ${field ? `<input id="pop-in" type="text" maxlength="40" placeholder="Your answer" autocomplete="off">` : ""}</div></div>
+      <div class="sys-foot"><code>${esc(code)}</code><button class="btn primary" id="pop-ok">${esc(button)}</button></div>`;
     const scrim = document.createElement("div"); scrim.className = "scrim pop";
-    const m = document.createElement("div"); m.className = "modal card pop" + (alarm ? " alarm" : "");
-    m.innerHTML = `<h2 style="margin-top:0">${esc(title)}</h2><p>${esc(text)}</p>
-      ${field ? `<input id="pop-in" type="text" maxlength="40" placeholder="Your answer" autocomplete="off" style="width:100%">` : ""}
-      <div class="row" style="margin-top:14px;justify-content:flex-end"><button class="btn primary" id="pop-ok">${esc(button)}</button></div>`;
-    document.body.append(scrim, m);
-    const inp = $("#pop-in", m);
-    const close = () => { scrim.remove(); m.remove(); done(inp ? inp.value : ""); };
-    $("#pop-ok", m).onclick = close;
-    if (inp) { inp.focus(); inp.onkeydown = (e) => { if (e.key === "Enter") close(); }; } else $("#pop-ok", m).focus();
+    const m = document.createElement("div"); m.className = `modal pop syserr lv${level}`;
+    m.innerHTML = inner;
+    // copies stacked behind it, the way error boxes pile up when a program falls over
+    const ghosts = Array.from({ length: level + 1 }, (_, i) => {
+      const g = document.createElement("div"); g.className = "modal pop syserr ghost";
+      g.innerHTML = inner.replace(/ id="[^"]*"/g, "");
+      g.style.setProperty("--gx", `${(i + 1) * -18}px`); g.style.setProperty("--gy", `${(i + 1) * -16}px`);
+      g.style.animationDelay = `${(level - i) * 70}ms`;
+      return g;
+    });
+    document.body.append(scrim, ...ghosts.reverse(), m);
+    document.body.classList.add("glitching");
+    setTimeout(() => document.body.classList.remove("glitching"), 500);
+    errorSound();
+
+    const inp = $("#pop-in", m), ok = $("#pop-ok", m);
+    const close = () => { scrim.remove(); ghosts.forEach((g) => g.remove()); m.remove(); done(inp ? inp.value : ""); };
+    $(".sys-x", m).onclick = () => {  // the X does nothing but complain
+      errorSound();
+      m.classList.remove("shake"); void m.offsetWidth; m.classList.add("shake");
+    };
+    let left = dodges, home = null, dodgedAt = 0;
+    const dodge = (e) => {  // jump somewhere else on the screen, well away from the pointer
+      if (left <= 0) return false;
+      left--; dodgedAt = Date.now();
+      home = home || ok.getBoundingClientRect();
+      const pad = 12, w = innerWidth - home.width - 2 * pad, h = innerHeight - home.height - 2 * pad;
+      let x, y, n = 0;
+      do { x = pad + Math.random() * w; y = pad + Math.random() * h; n++; }
+      while (n < 30 && Math.hypot(x + home.width / 2 - e.clientX, y + home.height / 2 - e.clientY) < 170);
+      ok.style.transform = `translate(${Math.round(x - home.left)}px, ${Math.round(y - home.top)}px)`;
+      ok.textContent = left ? pick(TAUNTS) : button;
+      return true;
+    };
+    ok.addEventListener("pointerenter", (e) => { if (e.pointerType === "mouse") dodge(e); });
+    ok.addEventListener("pointerdown", (e) => { if (dodge(e)) e.preventDefault(); });
+    ok.onclick = (e) => {
+      if (Date.now() - dodgedAt < 400) return;  // the tap that made it jump
+      if (!dodge(e)) close();
+    };
+    if (inp) { inp.focus(); inp.onkeydown = (e) => { if (e.key === "Enter") close(); }; }
+    else if (!dodges) ok.focus();
   });
 }
 
@@ -106,6 +173,18 @@ const SWIFT_QUIZ = [
   ["How many sides does a hexagon have?", ["6", "six"]],
   ["How many days are in a leap year?", ["366"]],
   ["What colour do you get by mixing blue and yellow?", ["green"]],
+  ["What is 9 × 6?", ["54"]],
+  ["What is 15 + 27?", ["42"]],
+  ["What is 144 ÷ 12?", ["12", "twelve"]],
+  ["What is 3 squared?", ["9", "nine"]],
+  ["What is 25% of 80?", ["20", "twenty"]],
+  ["How many minutes are in two hours?", ["120"]],
+  ["How many legs does a spider have?", ["8", "eight"]],
+  ["How many continents are there?", ["7", "seven"]],
+  ["How many strings does a standard bass guitar have?", ["4", "four"]],
+  ["How many keys are on a standard piano?", ["88"]],
+  ["Which planet is known as the Red Planet?", ["mars"]],
+  ["What is the capital of France?", ["paris"]],
 ];
 const SWIFT_FAILS = [
   "Looks like you'll just have to Shake It Off.",
@@ -113,24 +192,40 @@ const SWIFT_FAILS = [
   "You and this chart are Never Ever Getting Back Together.",
   "There's some Bad Blood between you and that question.",
   "You Need to Calm Down and pick a different artist.",
+  "This Is Why We Can't Have Nice Things.",
+  "Look What You Made Me Do. Chart cancelled.",
+  "Is It Over Now? Yes. Yes it is.",
+  "That answer was a Cruel Summer for maths.",
+  "Long Story Short: no.",
+  "Karma says no.",
+  "I Knew You Were Trouble the moment you typed that.",
+  "Not even in your Wildest Dreams.",
+  "Guess who's the Anti-Hero of this quiz.",
+  "Better luck in your next Era.",
 ];
 const pick = (list) => list[Math.floor(Math.random() * list.length)];
 const isSwift = (artist) => /taylor\s*swift/i.test(artist || "");  // same rule as GUARDED_ARTISTS in the server
 
 // True when the song may be charted after all.
 async function swiftGate(artist, title) {
-  await popup("Warning", "RockWizard has reached max capacity for songs by this artist (Taylor Swift). Proceed with absolute caution.", "Proceed with caution", false, true);
-  await popup("Consent required", `Before continuing please get the express written consent of your admin (Jacob Mastroianni) to proceed with the charting of this song [${title || "this song"} - ${artist || "Taylor Swift"}].`, "I have consent");
-  await popup("Ok seriously Claire", "You really don't need any more T Swift.", "But I do");
+  await loadErrorSound();
+  await errorBox({ title: "Warning", code: "ERR_SWIFT_OVERFLOW (0x1989)", level: 1, dodges: 2, button: "Proceed with caution",
+    text: "RockWizard has reached max capacity for songs by this artist (Taylor Swift). Proceed with absolute caution." });
+  await errorBox({ title: "Consent required", code: "ERR_CONSENT_NOT_FOUND (0x000D)", level: 2, dodges: 3, button: "I have consent",
+    text: `Before continuing please get the express written consent of your admin (Jacob Mastroianni) to proceed with the charting of this song [${title || "this song"} - ${artist || "Taylor Swift"}].` });
+  await errorBox({ title: "Ok seriously Claire", code: "ERR_TOO_MUCH_TSWIFT (0x0016)", level: 3, dodges: 4, button: "But I do",
+    text: "You really don't need any more T Swift." });
   const [question, answers] = pick(SWIFT_QUIZ);
-  const answer = (await popup("Final check", `Answer correctly to chart this song. ${question}`, "Submit", true)).trim().toLowerCase().replace(/[.!]+$/, "");
+  const answer = (await errorBox({ title: "Final check", code: "HUMAN_VERIFICATION_REQUIRED", level: 1, field: true, button: "Submit",
+    text: `Answer correctly to chart this song. ${question}` })).trim().toLowerCase().replace(/[.!]+$/, "");
   if (answers.includes(answer)) return true;
-  await popup("Charting failed", `Wrong answer. ${pick(SWIFT_FAILS)}`, "Fine", false, true);
+  await errorBox({ title: "Charting failed", code: "FATAL: ANSWER_INVALID", level: 3, button: "Fine", text: `Wrong answer. ${pick(SWIFT_FAILS)}` });
   return false;
 }
 
 // Adds a song to the queue; null when the checkpoint above turned it away.
 async function startChart(body) {
+  armErrorSound();
   let job = await post("/api/jobs/convert", body);
   if (job.gate) {
     if (!(await swiftGate(job.artist, job.title))) return null;
@@ -349,7 +444,8 @@ function pending(f) {
     </div>
     <button class="btn primary big" id="make">${ICON.rocket} Make my chart</button>`;
   $("#make").onclick = async () => {
-    if (isSwift($("#pa").value) && !(await swiftGate($("#pa").value, $("#pt").value))) return;
+    armErrorSound();
+    if (isSwift($("#pa").value) && !(await api("/api/settings")).error_off && !(await swiftGate($("#pa").value, $("#pt").value))) return;
     const fd = new FormData();
     fd.append("file", f); fd.append("artist", $("#pa").value); fd.append("title", $("#pt").value);
     $("#make").disabled = true; $("#make").innerHTML = `<span class="spinner"></span> Uploading…`;
@@ -1018,7 +1114,14 @@ async function renderSettings() {
     <div class="card" id="phone"><h2>Use RockWizard on your phone</h2><div class="empty"><span class="spinner"></span></div></div>
     <div class="card"><h2>Steam Deck sync</h2><div id="syncbox" class="muted"></div></div>
     <div class="card"><h2>YouTube downloader</h2><p class="muted" style="margin-top:0">YouTube changes often and older downloader versions stop working. If searching or downloading fails, update it.</p>
-      <button class="btn" id="dl">Update downloader</button> <span id="dlmsg" class="faint"></span></div>`);
+      <button class="btn" id="dl">Update downloader</button> <span id="dlmsg" class="faint"></span></div>
+    <div class="card"><h2>Advanced</h2>
+      <label class="item check" style="border:0;padding:0"><input type="checkbox" id="erroff" ${st.error_off ? "checked" : ""}>
+        <div class="grow">Turn off error function<div class="faint">Skips the extra error checks when a song is added.</div></div></label></div>`);
+  $("#erroff").onchange = async (e) => {
+    try { S.settings = await post("/api/settings", { error_off: e.target.checked }); toast("Saved"); }
+    catch (err) { toast(err.message); e.target.checked = !e.target.checked; }
+  };
   api("/api/learned").then((r) => {
     const box = $("#learned"); if (!box) return;
     box.innerHTML = r.items.map((x) => `<div class="row spread rc-row"><span><span style="text-transform:capitalize">${esc(x.inst)}</span>: ${ISSUE_TEXT[x.issue][x.net > 0 ? 0 : 1].toLowerCase()}</span>

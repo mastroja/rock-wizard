@@ -406,7 +406,7 @@ async def job_convert(req: Request):
             b["artist"], b["title"] = search.names_from_file(Path(b["path"]).stem)
     # a household joke: these artists need the app's popups answered first ("cleared")
     who = f"{b.get('artist', '')} {extra.get('channel', '')}".lower()
-    if not b.get("cleared") and any(name in who for name in GUARDED_ARTISTS):
+    if not cfg.get("error_off") and not b.get("cleared") and any(name in who for name in GUARDED_ARTISTS):
         return {"gate": "swift", "artist": b.get("artist") or extra.get("channel", ""), "title": b.get("title", "")}
     j = add_job("convert", f"{b.get('artist', '')} - {b.get('title', '')}".strip(" -") or "YouTube song",
                 steps, by=added_by(req), path=b.get("path"), url=b.get("url"), artist=b.get("artist", ""),
@@ -493,6 +493,16 @@ def suggestions():
 def sample(artist: str = "", title: str = ""):
     """{"art", "audio"}: the album cover and a 30-second clip of a song, or {} when there is none."""
     return samples.get(artist, title) if title.strip() else {}
+
+
+@app.get("/api/errorsound")
+def error_sound():
+    """This PC's own Windows error sound, for the checkpoint's popups (without one the app buzzes)."""
+    media = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Media"
+    for name in ("Windows Error.wav", "Windows Critical Stop.wav", "chord.wav"):
+        if (media / name).is_file():
+            return FileResponse(media / name, media_type="audio/wav", headers={"Cache-Control": "max-age=86400"})
+    raise HTTPException(404, "no error sound on this PC")
 
 
 @app.get("/api/video/sample")
@@ -961,7 +971,7 @@ SETTING_KEYS = ("songs_dir", "live_dir", "tidy_dir", "charter", "clonehero_exe",
 @app.get("/api/settings")
 def get_settings(request: Request):
     local = request.client and request.client.host in ("127.0.0.1", "::1")
-    return {k: cfg.get(k, "") for k in SETTING_KEYS} | {"local": bool(local)}
+    return {k: cfg.get(k, "") for k in SETTING_KEYS} | {"local": bool(local), "error_off": bool(cfg.get("error_off"))}
 
 
 @app.post("/api/settings")
@@ -971,8 +981,10 @@ async def set_settings(req: Request):
     for k in SETTING_KEYS:
         if k in b:
             cfg[k] = str(b[k]).strip()
+    if "error_off" in b:  # Settings calls it the "error function": the GUARDED_ARTISTS checkpoint
+        cfg["error_off"] = bool(b["error_off"])
     save_config(cfg)
-    return {k: cfg.get(k, "") for k in SETTING_KEYS}
+    return get_settings(req)
 
 
 @app.get("/api/startup")
