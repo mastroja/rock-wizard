@@ -23,7 +23,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import feedback, library, ml, pipeline, rechart, review, samples, search, startup, suggest, tidy
@@ -493,6 +493,28 @@ def suggestions():
 def sample(artist: str = "", title: str = ""):
     """{"art", "audio"}: the album cover and a 30-second clip of a song, or {} when there is none."""
     return samples.get(artist, title) if title.strip() else {}
+
+
+@app.get("/api/video/sample")
+def video_sample(url: str, request: Request):
+    """A YouTube result's sound, passed straight through so it can be heard in the app before
+    it is charted. Nothing is saved; the browser asks for just the part it plays."""
+    try:
+        up = search.open_sample(url, request.headers.get("range", ""))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception:
+        raise HTTPException(502, "Couldn't get that video's sound (try Settings, Update downloader)")
+
+    def body():
+        try:
+            while chunk := up.read(64 * 1024):
+                yield chunk
+        finally:
+            up.close()
+    keep = ("content-type", "content-length", "content-range", "accept-ranges")
+    return StreamingResponse(body(), status_code=up.status,
+                             headers={k: v for k, v in up.headers.items() if k.lower() in keep})
 
 
 @app.get("/api/search")

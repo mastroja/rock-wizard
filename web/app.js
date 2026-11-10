@@ -27,21 +27,28 @@ function toast(msg) {
 
 // ---------- song previews: a 30-second clip behind each cover, one playing at a time ----------
 const player = new Audio();
-let playingBtn = null;
+const CLIP = 30;  // seconds of a video that are played
+let playingBtn = null, clipFrom = 0, clipEnd = 0;
 function stopPreview() {
   player.pause();
   if (playingBtn) { playingBtn.classList.remove("playing", "loading"); playingBtn = null; }
-  $$(".embed").forEach((e) => e.remove());
-  $$(".vthumb.on").forEach((e) => e.classList.remove("on"));
 }
 player.onended = stopPreview;
+// a whole video starts a little way in (past the intro) and stops after CLIP seconds
+player.onloadedmetadata = () => {
+  if (!clipFrom) return;
+  const at = Math.min(clipFrom, (player.duration || 0) / 3);
+  player.currentTime = at; clipEnd = at + CLIP;
+};
+player.ontimeupdate = () => { if (clipEnd && player.currentTime >= clipEnd) stopPreview(); };
 player.onplaying = () => { if (playingBtn) { playingBtn.classList.remove("loading"); playingBtn.classList.add("playing"); } };
 player.onerror = () => { if (playingBtn) { toast("That preview wouldn't play"); stopPreview(); } };
 const PLAY_SVG = `<svg class="i-play" viewBox="0 0 24 24"><path d="M8.5 5.5v13l10.5-6.5z"/></svg>`;
+const PP_HTML = `<span class="pp">${PLAY_SVG}<span class="spinner"></span><span class="eq"><i></i><i></i><i></i></span></span>`;
 // A cover with a play button over it. With no clip known yet it is a plain picture; setSample adds the rest.
 const artHTML = (s) => `<button class="art${s.audio ? "" : " none"}" data-audio="${esc(s.audio || "")}" aria-label="Play a preview">
   ${s.art ? `<img src="${esc(s.art)}" alt="" loading="lazy">` : `<span class="ph">${esc((s.title || "?").trim()[0].toUpperCase())}</span>`}
-  <span class="pp">${PLAY_SVG}<span class="spinner"></span><span class="eq"><i></i><i></i><i></i></span></span></button>`;
+  ${PP_HTML}</button>`;
 function setSample(btn, m) {
   if (!m || !m.audio || !btn || !btn.isConnected) return false;
   btn.dataset.audio = m.audio;
@@ -54,12 +61,13 @@ async function fillSample(btn, artist, title) {
   try { return setSample(btn, await api("/api/sample?" + qs({ artist, title }))); } catch (e) { return false; }
 }
 document.addEventListener("click", (e) => {
-  const a = e.target.closest(".art");
+  const a = e.target.closest("[data-audio]");
   if (!a || !a.dataset.audio) return;
   const mine = playingBtn === a;
   stopPreview();
   if (mine) return;
   playingBtn = a; a.classList.add("loading");
+  clipFrom = Number(a.dataset.from || 0); clipEnd = 0;
   player.src = a.dataset.audio;
   player.play().catch(() => {});
 });
@@ -229,16 +237,7 @@ function namesFromFile(stem) {  // quick guess; the PC looks names up properly w
 }
 
 function renderCreate() {
-  page("Create", "Drop in a song, search for one, or paste a YouTube link. Your PC does the work.", `
-    <div class="card">
-      <div class="drop" id="drop">
-        <div class="icon">${ICON.upload}</div>
-        <b>Drop an MP3 or WAV here</b>
-        <div class="muted">or click to choose a file</div>
-        <input type="file" id="file" accept="audio/*,.mp3,.wav,.flac,.ogg,.m4a,.opus" hidden>
-      </div>
-      <div id="pending" class="hidden stack" style="margin-top:14px"></div>
-    </div>
+  page("Create", "Search for a song or paste a YouTube link. Your PC does the work.", `
     <div class="card">
       <h2>Find a song</h2>
       <div class="searchbox">
@@ -252,19 +251,35 @@ function renderCreate() {
       <p class="faint" style="margin:4px 0 12px">Picked by hand for how they should play. Tap a cover to hear the song. Anything already in your library is left out.</p>
       <div id="suggest"><div class="empty"><span class="spinner"></span></div></div>
     </div>
-    <div class="card desktop-only" id="batchcard">
-      <div class="row spread wrap">
-        <div><h2 style="margin:0">Convert a whole folder</h2><div class="faint">Every song in a folder, one after another.</div></div>
-        <button class="btn" id="pickbatch">${ICON.folder} Choose folder…</button>
+    <details class="card fold" id="moreways">
+      <summary><h2>More ways to add a song</h2> <span class="faint">${desk() ? "your own file, or a whole folder" : "use your own file"}</span></summary>
+      <div class="drop mini" id="drop">
+        <div class="icon">${ICON.upload}</div>
+        <div class="grow"><b>Use your own file</b><div class="muted">Drop an MP3 or WAV here, or click to choose one.</div></div>
+        <input type="file" id="file" accept="audio/*,.mp3,.wav,.flac,.ogg,.m4a,.opus" hidden>
       </div>
-      <div id="batch"></div>
-    </div>`);
-  const drop = $("#drop"), file = $("#file");
+      <div id="pending" class="hidden stack" style="margin-top:14px"></div>
+      <div class="desktop-only" id="batchcard" style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border)">
+        <div class="row spread wrap">
+          <div><b>Convert a whole folder</b><div class="faint">Every song in a folder, one after another.</div></div>
+          <button class="btn" id="pickbatch">${ICON.folder} Choose folder…</button>
+        </div>
+        <div id="batch"></div>
+      </div>
+    </details>`);
+  const drop = $("#drop"), file = $("#file"), more = $("#moreways"), main = $("#main");
   drop.onclick = () => file.click();
   file.onchange = () => file.files[0] && pending(file.files[0]);
-  drop.ondragover = (e) => { e.preventDefault(); drop.classList.add("over"); };
-  drop.ondragleave = () => drop.classList.remove("over");
-  drop.ondrop = (e) => { e.preventDefault(); drop.classList.remove("over"); const f = e.dataTransfer.files[0]; if (f) pending(f); };
+  // a file dragged anywhere onto this screen opens the section and lands in it
+  const hasFile = (e) => [...(e.dataTransfer ? e.dataTransfer.types : [])].includes("Files");
+  main.ondragover = (e) => { if (!drop.isConnected || !hasFile(e)) return; e.preventDefault(); more.open = true; drop.classList.add("over"); };
+  main.ondragleave = (e) => { if (!main.contains(e.relatedTarget)) drop.classList.remove("over"); };
+  main.ondrop = (e) => {
+    if (!drop.isConnected || !hasFile(e)) return;
+    e.preventDefault(); drop.classList.remove("over");
+    const f = e.dataTransfer.files[0];
+    if (f) { more.open = true; pending(f); more.scrollIntoView({ behavior: "smooth", block: "center" }); }
+  };
   $("#go").onclick = doSearch;
   // a block body: an on… handler that returns false throws the keystroke away
   $("#q").onkeydown = (e) => { if (e.key === "Enter") doSearch(); };
@@ -374,23 +389,16 @@ async function doSearch() {
           <button class="btn small" data-chart="${i}">Download</button></div>`).join("")
         : `<p class="faint">No human-made chart found, so making one is the way to go.</p>`}
       <h2 style="margin-top:16px">Make a chart from YouTube</h2>
-      ${r.videos.length ? `<p class="faint" style="margin:-6px 0 6px">Tap a picture to hear that upload before you chart it.</p>` : ""}
+      ${r.videos.length ? `<p class="faint" style="margin:-6px 0 6px">Tap a picture to hear 30 seconds of that upload before you chart it.</p>` : ""}
       ${r.videos.map((v, i) => `
         <div class="result">
-          <button class="vthumb" data-pv="${i}" aria-label="Play this video"><img class="thumb" src="https://i.ytimg.com/vi/${esc(ytId(v.url))}/mqdefault.jpg" alt="" loading="lazy"><span class="pp">${PLAY_SVG}</span></button>
+          <button class="vthumb" data-audio="/api/video/sample?${esc(qs({ url: v.url }))}" data-from="30" aria-label="Play a sample"><img class="thumb" src="https://i.ytimg.com/vi/${esc(ytId(v.url))}/mqdefault.jpg" alt="" loading="lazy">${PP_HTML}</button>
           <div class="grow"><div class="ellipsis"><b>${esc(v.title)}</b></div>
             <div class="faint">${esc(v.channel)} · ${mmss(v.seconds)} ${v.best ? `<span class="chip green">Best match</span>` : ""}</div></div>
           <button class="btn primary small" data-video="${i}">Chart this</button></div>`).join("") || `<p class="faint">No videos found.</p>`}`;
     if (song.title) fillSample($(".songcard .art", out), song.artist || "", song.title).then((ok) => {
       const note = $("#clipnote", out);
       if (note) note.textContent = ok ? "Tap the cover for a 30-second clip, to check it's the right song." : "No clip found for this one.";
-    });
-    $$("[data-pv]", out).forEach((b) => b.onclick = () => {
-      const row = b.closest(".result"), open = b.classList.contains("on");
-      stopPreview();
-      if (open) return;
-      b.classList.add("on");
-      row.insertAdjacentHTML("afterend", `<div class="embed"><iframe src="https://www.youtube-nocookie.com/embed/${encodeURIComponent(ytId(r.videos[b.dataset.pv].url))}?autoplay=1" allow="autoplay; encrypted-media; fullscreen" referrerpolicy="strict-origin-when-cross-origin"></iframe></div>`);
     });
     $$("[data-chart]", out).forEach((b) => b.onclick = async () => {
       const c = r.charts[b.dataset.chart];

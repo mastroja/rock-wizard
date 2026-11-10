@@ -685,6 +685,36 @@ def names_from_video(title: str, channel: str) -> tuple[str, str]:
     return a, t
 
 
+YOUTUBE_HOSTS = ("youtube.com", "youtu.be")
+_streams: dict[str, tuple[float, str, dict]] = {}  # video address -> (found at, sound address, headers)
+
+
+def open_sample(url: str, byte_range: str = ""):
+    """An open connection to a YouTube video's sound, for playing a sample of a search result in
+    the app: the response to pass on (status, headers, read()). Nothing is saved. `byte_range` is
+    the browser's Range header, which lets it jump to the part it plays."""
+    host = urllib.parse.urlparse(url).hostname or ""
+    if not any(host == h or host.endswith("." + h) for h in YOUTUBE_HOSTS):
+        raise ValueError("Only YouTube videos can be sampled")
+    hit = _streams.get(url)
+    for last_try in (False, True):
+        if not hit or time.time() - hit[0] > 1800:
+            import yt_dlp
+            # a kind every browser plays as it comes: m4a sound, or else the small mp4
+            with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True, "noplaylist": True, "skip_download": True,
+                                   "format": "bestaudio[ext=m4a]/18/best[ext=mp4]"}) as y:
+                info = y.extract_info(url, download=False)
+            hit = _streams[url] = (time.time(), info["url"], dict(info.get("http_headers") or {}))
+        req = urllib.request.Request(hit[1], headers=hit[2] | ({"Range": byte_range} if byte_range else {}))
+        try:
+            return urllib.request.urlopen(req, timeout=20)
+        except urllib.error.HTTPError:
+            _streams.pop(url, None)  # the address went stale: look it up once more
+            hit = None
+            if last_try:
+                raise
+
+
 def youtube_download(url: str, dest_dir: Path, on_progress=lambda f: None,
                      stop: threading.Event | None = None) -> Path:
     """Download only the audio of a video into dest_dir; returns the file."""

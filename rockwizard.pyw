@@ -96,8 +96,17 @@ def on_closed():
         stop_server()
 
 
+def own_taskbar_icon():
+    """Windows files a window under the program that runs it, which here is Python, and shows
+    Python's icon on the taskbar. With an identity of its own the taskbar shows the window's icon."""
+    if sys.platform == "win32":
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("RockWizard.Desktop")
+
+
 def main():
     global window, started_here
+    own_taskbar_icon()
     if not port_open():
         started_here = launch_server()
     up = port_open()
