@@ -367,7 +367,7 @@ merge_devices()
 # ---------- app + access ----------
 app = FastAPI(title="RockWizard")
 _seen = {"pc": 0.0}  # when this PC's own window last asked for anything
-_people = {"t": 0.0, "added": {}}  # songs added per person, counted from the libraries now and then
+_people = {"t": 0.0, "added": {}, "songs": []}  # every song, and who added it, read from the libraries now and then
 
 
 @app.middleware("http")
@@ -400,7 +400,8 @@ def me(request: Request):
     d = device_of(request)
     name = who(request) if d is None or d.get("name") else ""
     return {"local": d is None, "owner": is_owner(request), "name": cfg.get("charter", "") if d is None else d.get("name", ""),
-            "who": name, "color": social.color_of(name) if name else "", "colors": social.COLORS}
+            "who": name, "color": social.color_of(name) if name else "", "colors": social.COLORS,
+            "avatar": social.avatar_of(name) if name else None, "avatar_parts": social.AVATAR_PARTS}
 
 
 @app.post("/api/me")
@@ -410,6 +411,13 @@ async def set_me(request: Request):
     if "color" in b:  # a person's colour in the feed and on their songs
         try:
             social.set_color(who(request), str(b["color"]))
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        if "name" not in b and "avatar" not in b:
+            return me(request)
+    if "avatar" in b:  # built on their profile page; null goes back to initials
+        try:
+            social.set_avatar(who(request), b["avatar"])
         except ValueError as e:
             raise HTTPException(400, str(e))
         if "name" not in b:
@@ -1304,27 +1312,55 @@ async def shame(req: Request):
     return row
 
 
-def added_counts() -> dict:
-    """name key -> {"n": songs they added, "artists": {artist: n}}, from song.ini in staging and
-    Quickplay. Counted at most once a minute: it reads every song.ini."""
+def _tag_free(v: str) -> str:
+    return re.sub(r"</?[a-z]+(=[^>]*)?>", "", v or "", flags=re.I).strip()
+
+
+def song_index() -> list[dict]:
+    """Every song in staging and Quickplay, small: names, parts' difficulties, cover, and who added
+    it ("by", a name key; "" for someone else's chart nobody here added). Read at most once a
+    minute: it reads every song.ini."""
     if time.time() - _people["t"] < 60:
-        return _people["added"]
-    out = {}
-    for root in (staging_dir(), live_dir()):
+        return _people["songs"]
+    rows = []
+    for where, root in (("staging", staging_dir()), ("quickplay", live_dir())):
         if not root or not root.exists():
             continue
         for f in library.song_folders(root):
             ini = tidy.read_ini(f)
+            a, t = (ini["artist"], ini["name"]) if ini.get("artist") and ini.get("name") else library.names_of(f)
             by = ini.get("chc_added_by", "")
-            if not by and ini.get(library.MARKER, "0") in ("", "0"):
-                continue  # someone else's chart that nobody here added
-            row = out.setdefault(social.key_of(by or owner_name()), {"n": 0, "artists": {}})
+            ours = ini.get(library.MARKER, "0") not in ("", "0")
+            covers = [f / n for n in ("album.jpg", "album.png") if (f / n).exists()]
+            try:
+                length = int(float(ini.get("song_length", "0") or 0)) // 1000
+            except ValueError:
+                length = 0
+            rows.append({"folder": str(f), "name": f.name, "artist": _tag_free(a), "title": _tag_free(t),
+                         "where": where, "ours": ours, "added_by": by,
+                         "by": social.key_of(by or owner_name()) if by or ours else "",
+                         "tiers": {k: ini.get(f"diff_{k}", "") for k in ("guitar", "bass", "drums", "vocals")},
+                         "has_cover": bool(covers), "cover_v": max((int(c.stat().st_mtime) for c in covers), default=0),
+                         "length": length, "modified": f.stat().st_mtime, "key": social.song_key(a, t)})
+    _people.update(t=time.time(), songs=rows, added=None)
+    return rows
+
+
+def added_counts() -> dict:
+    """name key -> {"n": songs they added, "artists": {artist: n}}, from song.ini in staging and
+    Quickplay (see song_index)."""
+    rows = song_index()
+    if _people["added"] is None:
+        out = {}
+        for r in rows:
+            if not r["by"]:
+                continue
+            row = out.setdefault(r["by"], {"n": 0, "artists": {}})
             row["n"] += 1
-            artist = ini.get("artist", "").strip()
-            if artist:
-                row["artists"][artist] = row["artists"].get(artist, 0) + 1
-    _people.update(t=time.time(), added=out)
-    return out
+            if r["artist"]:
+                row["artists"][r["artist"]] = row["artists"].get(r["artist"], 0) + 1
+        _people["added"] = out
+    return _people["added"]
 
 
 @app.get("/api/names")
@@ -1357,8 +1393,125 @@ def people(request: Request):
         top = max(a["artists"].items(), key=lambda kv: kv[1], default=("", 0))
         out.append(r | {"color": social.color_of(r["name"]), "online": now - r["last"] < 150, "me": k == me_key,
                         "added": a["n"], "top_artist": top[0], "top_count": top[1],
-                        "hearts": len(social.hearts_of(r["name"])), "shame": social.shame_of(r["name"])})
+                        "hearts": len(social.hearts_of(r["name"])), "shame": social.shame_of(r["name"]),
+                        "avatar": social.avatar_of(r["name"])})
     return sorted(out, key=lambda r: (-r["added"], r["name"].lower()))
+
+
+@app.get("/api/profile")
+def profile(name: str, request: Request):
+    """One person's page: who they are, their bands, and every song they added (converted or asked for)."""
+    k = social.key_of(name)
+    p = next((r for r in people(request) if social.key_of(r["name"]) == k), None)
+    songs = sorted((r for r in song_index() if r["by"] == k), key=lambda r: -r["modified"])
+    if p is None and songs:  # a name on songs from before devices were tracked
+        n = songs[0]["added_by"]
+        p = {"name": n, "owner": False, "last": 0, "online": False, "me": False, "added": len(songs),
+             "color": social.color_of(n), "avatar": social.avatar_of(n), "hearts": len(social.hearts_of(n)),
+             "shame": social.shame_of(n)}
+    if p is None:
+        raise HTTPException(404, f"Nobody called {name} has been here")
+    mine = [{"id": b["id"], "name": b["name"], "members": b["members"]}
+            for b in social.bands() if social.is_member(b, p["name"])]
+    return p | {"songs": songs, "bands": mine}
+
+
+@app.get("/api/songs/find")
+def songs_find(q: str = "", limit: int = 30):
+    """Songs in staging and Quickplay matching every word of q (for adding to a set list)."""
+    words = q.lower().split()
+    hits = [r for r in song_index() if all(w in f"{r['artist']} {r['title']} {r['name']}".lower() for w in words)]
+    hits.sort(key=lambda r: (r["where"] != "quickplay", r["artist"].lower(), r["title"].lower()))
+    return hits[:max(1, min(limit, 100))]
+
+
+# ---------- bands ----------
+def _band_out(b: dict) -> dict:
+    """A band with each set-list song found again in the libraries (by key: it may have moved)."""
+    index = {}
+    for r in song_index():
+        if r["key"] not in index or r["where"] == "quickplay":
+            index[r["key"]] = r
+    for sl in b["setlists"]:
+        rows = []
+        for s in sl["songs"]:
+            r = index.get(s["key"])
+            if r:
+                rows.append(s | {k: r[k] for k in ("folder", "where", "tiers", "has_cover", "cover_v", "length")} | {"here": True})
+            else:
+                rows.append(s | {"here": False, "tiers": {}, "has_cover": False, "length": 0})
+        sl["songs"] = rows
+        sl["length"] = sum(r["length"] for r in rows)
+    return b
+
+
+@app.get("/api/bands")
+def bands_list():
+    return [b | {"setlists": [{"id": s["id"], "name": s["name"], "n": len(s["songs"])} for s in b["setlists"]]}
+            for b in social.bands()]
+
+
+@app.post("/api/bands")
+async def band_create(req: Request):
+    try:
+        b = social.band_create((await req.json()).get("name", ""), who(req))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    social.log("band", who(req), f"started a band: {b['name']}", band=b["id"])
+    return _band_out(b)
+
+
+@app.get("/api/bands/{bid}")
+def band_get(bid: str):
+    try:
+        return _band_out(social.band(bid))
+    except KeyError as e:
+        raise HTTPException(404, str(e.args[0]))
+
+
+BAND_LEAD_OPS = ("rename", "delete", "remove_member")  # the one who started the band, or the host
+
+
+@app.post("/api/bands/{bid}")
+async def band_change(bid: str, req: Request):
+    """{op, ...}: rename/delete/remove_member (who started it, or the host), leave (any member),
+    add_member and the set-list ops (any member, or the host)."""
+    b = await req.json()
+    op, name = str(b.get("op", "")), who(req)
+    try:
+        band = social.band(bid)
+    except KeyError as e:
+        raise HTTPException(404, str(e.args[0]))
+    member = social.is_member(band, name)
+    lead = is_owner(req) or social.key_of(band["by"]) == social.key_of(name)
+    args = {k: b[k] for k in ("name", "setlist", "index", "step") if k in b}
+    if op == "leave":
+        if not member:
+            raise HTTPException(400, "You're not in this band")
+        op, args = "remove_member", {"name": name}
+    elif op in BAND_LEAD_OPS:
+        if not lead:
+            raise HTTPException(403, f"Only {band['by']} (who started the band) or the host can do that")
+    elif not (member or is_owner(req)):
+        raise HTTPException(403, "Only the band's members can change it")
+    if op == "add_member":
+        known = {social.key_of(p["name"]): p["name"] for p in people(req)}
+        if social.key_of(args.get("name", "")) not in known:
+            raise HTTPException(400, "Pick someone who has used RockWizard")
+        args["name"] = known[social.key_of(args["name"])]
+    if op == "song_add":
+        f, a, t, key = song_ref(str(b.get("folder", "")))
+        args["song"] = {"key": key, "folder": str(f), "title": t or f.name, "artist": a}
+    try:
+        social.band_edit(bid, op, **args)
+    except (KeyError, ValueError) as e:
+        raise HTTPException(400, str(e.args[0]) if e.args else "That didn't work")
+    if op == "add_member":
+        social.log("band", name, f"added {args['name']} to {band['name']}", band=bid, **{"for": args["name"]})
+    try:
+        return _band_out(social.band(bid))
+    except KeyError:
+        return {"deleted": True}
 
 
 def song_ref(folder: str) -> tuple[Path, str, str, str]:

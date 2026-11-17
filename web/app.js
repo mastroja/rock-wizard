@@ -289,13 +289,15 @@ const VIEWS = [["create", "Create"], ["queue", "Queue"], ["staging", "Staging"],
 const S = { settings: {}, jobs: [], status: {}, staging: null, me: { owner: true, name: "" },
   people: {}, peopleList: [], hearts: { mine: new Set(), counts: {} }, actId: -1, socialRev: -1, unread: 0 };
 const owner = () => S.me.owner;
-const byChip = (s) => s.added_by ? `<span class="chip by"${tint(s.added_by)}>from ${esc(s.added_by)}</span>` : "";
+const byChip = (s) => s.added_by ? `<span class="chip by link"${tint(s.added_by)} data-user="${esc(s.added_by)}">from ${esc(s.added_by)}</span>` : "";
 const view = () => (location.hash.slice(1).split("?")[0] || "create");
+const hashArg = (k) => new URLSearchParams(location.hash.split("?")[1] || "").get(k) || "";
+const navView = () => (["profile", "band"].includes(view()) ? "party" : view());  // a profile or band lives under Party
 
 function navHTML(cls) {
   const active = S.jobs.filter((j) => j.status === "queued" || j.status === "running").length;
   return VIEWS.filter(([id]) => owner() || id !== "library").map(([id, label]) =>
-    `<button class="${cls}${view() === id ? " on" : ""}" data-go="${id}">${ICON[id]}<span>${label}</span>` +
+    `<button class="${cls}${navView() === id ? " on" : ""}" data-go="${id}">${ICON[id]}<span>${label}</span>` +
     (id === "queue" && active ? `<span class="count">${active}</span>` : "") +
     (id === "party" && S.unread ? `<span class="count">${S.unread}</span>` : "") + `</button>`).join("");
 }
@@ -315,6 +317,14 @@ document.addEventListener("click", (e) => {
   const go = e.target.closest("[data-go]");
   if (go) { location.hash = go.dataset.go; }
 });
+// a tap on a name or an avatar opens that person's profile (before the card it sits on opens anything)
+document.addEventListener("click", (e) => {
+  const u = e.target.closest("[data-user]");
+  if (!u || !u.dataset.user) return;
+  e.stopPropagation(); e.preventDefault();
+  closeDrawer();
+  location.hash = "profile?" + qs({ name: u.dataset.user });
+}, true);
 window.addEventListener("hashchange", () => { closeDrawer(); stopPreview(); renderNav(); render(); });
 
 function statusPills() {
@@ -361,7 +371,7 @@ function page(title, sub, body, actions = "") {
   lastPage = title;
   $("#main").innerHTML = `<div class="top"><div><h1>${title}</h1>${sub ? `<p class="sub">${sub}</p>` : ""}</div><div class="row">${actions}</div></div>${body}`;
 }
-const render = () => ((!owner() && view() === "library" ? renderCreate : { create: renderCreate, queue: renderQueue, staging: renderStaging, live: renderLive, party: renderParty, library: renderLibrary, settings: renderSettings }[view()]) || renderCreate)();
+const render = () => ((!owner() && view() === "library" ? renderCreate : { create: renderCreate, queue: renderQueue, staging: renderStaging, live: renderLive, party: renderParty, library: renderLibrary, settings: renderSettings, profile: renderProfile, band: renderBand }[view()]) || renderCreate)();
 
 // ---------- create ----------
 function namesFromFile(stem) {  // quick guess; the PC looks names up properly while converting
@@ -862,7 +872,8 @@ async function openReview(folder, live = false) {
     <div class="row wrap together">
       <button class="btn" id="watch">${ICON.play} Watch the chart</button>
       <button class="btn${S.hearts.mine.has(s.key) ? " hearted" : ""}" id="heartbtn">${HEART}<span>${S.hearts.mine.has(s.key) ? "Favourite" : "Add to favourites"}</span></button>
-      ${live ? `<button class="btn" id="setadd">+ Tonight's setlist</button>` : ""}</div>
+      ${live ? `<button class="btn" id="setadd">+ Tonight's setlist</button>` : ""}
+      <button class="btn" id="bandadd">+ Band set list</button></div>
     ${owner() ? `<div class="card next"><h2>${live ? "Actions" : "Next"}</h2>
       ${live ? "" : `<div class="row">
         <button class="btn primary grow" id="pub">${ICON.rocket} Publish to live</button>
@@ -903,6 +914,7 @@ async function openReview(folder, live = false) {
     try { await post("/api/setlist/add", { folder: s.folder }); toast("Added to tonight's setlist"); setadd.disabled = true; setadd.textContent = "On tonight's setlist"; }
     catch (err) { toast(err.message); }
   };
+  $("#bandadd", dr).onclick = () => pickSetlist(s);
   const refreshAfter = (folder2) => { openReview(folder2, live); if (view() === "staging") renderStaging(); if (view() === "live") renderLive(); };
   const unpub = $("#unpub", dr);
   if (unpub) unpub.onclick = async () => {
@@ -1302,7 +1314,12 @@ async function renderSettings() {
 const pkey = (n) => (n || "").toLowerCase().split(/\s+/).filter(Boolean).join(" ");  // same as social.key_of in the server
 const colorOf = (n) => (S.people[pkey(n)] || {}).color || "";
 const tint = (n) => { const c = colorOf(n); return c ? ` style="color:${c};border-color:${c}66;background:${c}1f"` : ""; };
-const avatar = (name, color, cls = "") => `<span class="avatar ${cls}" style="background:${color || colorOf(name) || "var(--accent)"}">${esc(initials(name))}</span>`;
+const avatarOf = (n) => (S.people[pkey(n)] || {}).avatar || (pkey(n) === pkey(S.me.who) ? S.me.avatar : null);
+// link=false for an avatar that shouldn't open a profile (the avatar builder's own previews)
+const avatar = (name, color, cls = "", link = true) => {
+  const a = avatarOf(name), bg = color || colorOf(name) || "var(--accent)";
+  return `<span class="avatar ${cls}${a ? " art" : ""}${link && name ? " link" : ""}" style="background:${bg}"${link && name ? ` data-user="${esc(name)}"` : ""}>${a ? avatarSVG(a) : esc(initials(name))}</span>`;
+};
 const since = (t) => { const m = Math.round((Date.now() / 1000 - t) / 60); return m < 1 ? "just now" : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`; };
 const HEART = `<svg class="i-heart" viewBox="0 0 24 24"><path d="M12 20.5s-7.5-4.6-7.5-10.2A4.3 4.3 0 0 1 12 7.6a4.3 4.3 0 0 1 7.5 2.7c0 5.6-7.5 10.2-7.5 10.2z"/></svg>`;
 
@@ -1352,7 +1369,12 @@ async function socialTick(st) {
     if (st.social !== S.socialRev) {
       const first = S.socialRev < 0;
       S.socialRev = st.social;
-      loadPeople().then(() => { if (!first && view() === "party") renderParty(true); });
+      loadPeople().then(() => {
+        if (first) return;
+        const typing = document.activeElement && document.activeElement.matches("input, textarea, select");
+        if (view() === "party") renderParty(true);
+        else if (["profile", "band"].includes(view()) && !typing && !$(".modal")) render();
+      });
     }
     if (S.actId < 0) { S.actId = st.activity; return; }  // the first look: nothing is news yet
     if (st.activity > S.actId) {
@@ -1367,24 +1389,24 @@ async function socialTick(st) {
 // ---------- party: feed, tonight's setlist, people, invite ----------
 let partyTab = "feed";
 const KIND = { added: ["", "Added"], ready: ["green", "Ready"], failed: ["red", "Failed"], published: ["accent", "Live"],
-  downloaded: ["", "Download"], shame: ["yellow", "Shame"], setlist: ["accent", "Setlist"] };
+  downloaded: ["", "Download"], shame: ["yellow", "Shame"], setlist: ["accent", "Setlist"], band: ["accent", "Band"] };
 
 async function renderParty(keep = false) {
   if (!keep || !$("#pbody")) {
-    page("Party", "What everyone's adding, tonight's setlist and who's who.",
-      `<div class="tabs" style="margin-bottom:14px">${[["feed", "Feed"], ["setlist", "Setlist"], ["people", "People"], ["invite", "Invite"]].map(([k, l]) =>
+    page("Party", "What everyone's adding, tonight's setlist, bands and who's who.",
+      `<div class="tabs" style="margin-bottom:14px">${[["feed", "Feed"], ["setlist", "Setlist"], ["bands", "Bands"], ["people", "People"], ["invite", "Invite"]].map(([k, l]) =>
         `<button class="${partyTab === k ? "on" : ""}" data-ptab="${k}">${l}</button>`).join("")}</div>
       <div id="pbody"><div class="empty"><span class="spinner"></span></div></div>`);
     $$("[data-ptab]").forEach((b) => b.onclick = () => { partyTab = b.dataset.ptab; renderParty(); });
   }
   const tab = partyTab;
   let html;
-  try { html = await { feed: feedHTML, setlist: setlistHTML, people: peopleHTML, invite: inviteHTML }[tab](); }
+  try { html = await { feed: feedHTML, setlist: setlistHTML, bands: bandsHTML, people: peopleHTML, invite: inviteHTML }[tab](); }
   catch (e) { html = `<p class="chip red">${esc(e.message)}</p>`; }
   const body = $("#pbody");
   if (!body || view() !== "party" || tab !== partyTab) return;
   body.innerHTML = html;
-  ({ feed: wireFeed, setlist: wireSetlist, people: wirePeople, invite: wireInvite })[tab](body);
+  ({ feed: wireFeed, setlist: wireSetlist, bands: wireBands, people: wirePeople, invite: wireInvite })[tab](body);
 }
 
 async function feedHTML() {
@@ -1393,7 +1415,7 @@ async function feedHTML() {
   const ask = canNotify() && Notification.permission === "default";
   return `${ask ? `<div class="card row spread wrap" style="gap:10px"><span>Get an alert on this computer when your song is ready.</span><button class="btn small" id="notifyon">Turn on alerts</button></div>` : ""}
     <div class="card feed">${events.length ? events.map((e) => `<div class="item">${avatar(e.who, e.color)}
-      <div class="grow"><b style="color:${e.color}">${esc(e.who)}</b> ${esc(e.text)}<div class="faint">${since(e.t)}</div></div>
+      <div class="grow"><b class="link" style="color:${e.color}" data-user="${esc(e.who)}">${esc(e.who)}</b> ${esc(e.text)}<div class="faint">${since(e.t)}</div></div>
       <span class="chip ${(KIND[e.kind] || ["", ""])[0]}">${(KIND[e.kind] || ["", e.kind])[1]}</span></div>`).join("")
       : `<div class="empty">Nothing yet. Add a song and it shows up here for everyone.</div>`}</div>`;
 }
@@ -1414,7 +1436,7 @@ async function setlistHTML() {
         <span class="setno">${i + 1}</span>
         ${s.has_cover ? `<img class="setcover" src="/api/cover?${qs({ folder: s.folder, w: 120 })}" alt="" loading="lazy">` : `<span class="setcover ph">${esc(initials(s.title))}</span>`}
         <div class="grow" style="min-width:0"><div class="t ellipsis">${esc(s.title)}</div><div class="faint ellipsis">${esc(s.artist || "Unknown artist")}</div>
-          <div style="margin-top:5px"><span class="chip by" style="color:${s.color};border-color:${s.color}66;background:${s.color}1f">from ${esc(s.by)}</span>${s.here ? "" : ` <span class="chip red">No longer in Quickplay</span>`}</div></div>
+          <div style="margin-top:5px"><span class="chip by link" style="color:${s.color};border-color:${s.color}66;background:${s.color}1f" data-user="${esc(s.by)}">from ${esc(s.by)}</span>${s.here ? "" : ` <span class="chip red">No longer in Quickplay</span>`}</div></div>
         <div class="row wrap setbtns">
           ${owner() ? `<button class="btn small" data-move="-1" data-key="${esc(s.key)}" aria-label="Move up" ${i ? "" : "disabled"}>&#8593;</button><button class="btn small" data-move="1" data-key="${esc(s.key)}" aria-label="Move down" ${i < songs.length - 1 ? "" : "disabled"}>&#8595;</button>` : ""}
           <button class="btn small${s.played ? " primary" : ""}" data-played="${s.played ? "" : "1"}" data-key="${esc(s.key)}">${s.played ? "Played" : "Mark played"}</button>
@@ -1436,10 +1458,11 @@ async function peopleHTML() {
   await loadPeople();
   const list = S.peopleList || [], shamed = list.filter((p) => p.shame.gate).sort((a, b) => b.shame.gate - a.shame.gate);
   const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
-  return `<div class="card"><h2>Your colour</h2>
-      <p class="faint" style="margin-top:0">Shows on your name in the feed and on songs you add.</p>
+  return `<div class="card"><div class="row spread wrap" style="gap:10px"><h2 style="margin:0">Your colour</h2>
+        ${S.me.who ? `<div class="row" style="gap:8px"><button class="btn small" id="myavatar">Edit avatar</button><button class="btn small" data-user="${esc(S.me.who)}">My profile</button></div>` : ""}</div>
+      <p class="faint">Shows on your name in the feed and on songs you add. Tap anyone below to see their profile.</p>
       <div class="swatches">${(S.me.colors || []).map((c) => `<button class="swatch${c === S.me.color ? " on" : ""}" data-color="${c}" style="background:${c}" aria-label="Pick this colour"></button>`).join("")}</div></div>
-    <div class="people">${list.map((p) => `<div class="card person">${avatar(p.name, p.color, "big" + (p.online ? " on" : ""))}
+    <div class="people">${list.map((p) => `<div class="card person link" data-user="${esc(p.name)}">${avatar(p.name, p.color, "big" + (p.online ? " on" : ""), false)}
       <div class="grow" style="min-width:0"><div class="ellipsis"><b>${esc(p.name)}</b>${p.me ? ` <span class="faint">(you)</span>` : ""}${p.owner ? ` <span class="chip accent">Host</span>` : ""}</div>
         <div class="faint">${p.online ? "Here now" : p.last ? `Last here ${since(p.last)}` : "Not seen yet"}</div>
         <div style="margin-top:6px">${plural(p.added, "song")} added${p.hearts ? ` · ${plural(p.hearts, "favourite")}` : ""}</div>
@@ -1451,9 +1474,256 @@ async function peopleHTML() {
       : `<div class="empty">Nobody has met the checkpoint yet.</div>`}</div>`;
 }
 function wirePeople(body) {
+  const ed = $("#myavatar", body);
+  if (ed) ed.onclick = () => editAvatar(() => renderParty(true));
   $$("[data-color]", body).forEach((b) => b.onclick = async () => {
     try { S.me = await post("/api/me", { color: b.dataset.color }); toast("Colour saved"); } catch (e) { toast(e.message); }
     renderParty(true);
+  });
+}
+
+// ---------- avatars: built from a few parts, drawn here (the server keeps only the choices) ----------
+const INK = "#2a1d17";
+function avatarSVG(a) {
+  const sk = a.skin, hc = a.hair_color, line = `fill="none" stroke="${INK}" stroke-width="2" stroke-linecap="round"`;
+  const top = `<path d="M15 30c0-12 7-17 17-17s17 5 17 17c-4-6-10-9-17-9s-13 3-17 9z" fill="${hc}"/>`;
+  const face = { round: `<circle cx="32" cy="33" r="16" fill="${sk}"/>`, square: `<rect x="16" y="17" width="32" height="32" rx="9" fill="${sk}"/>`,
+    long: `<ellipse cx="32" cy="34" rx="14" ry="18" fill="${sk}"/>` }[a.face] || "";
+  const back = { long: `<path d="M13 32c0-14 8-20 19-20s19 6 19 20v20H13z" fill="${hc}"/>`, bun: `<circle cx="32" cy="11" r="7" fill="${hc}"/>` }[a.hair] || "";
+  const front = { short: top, long: top, bun: top,
+    spiky: `<path d="M15 30l2-14 5 6 4-11 6 9 6-9 4 11 5-6 2 14c-5-6-10-8-17-8s-12 2-17 8z" fill="${hc}"/>`,
+    mohawk: `<path d="M28 23V7c0-2 8-2 8 0v16z" fill="${hc}"/>`,
+    curly: [16, 22, 28, 34, 40, 46].map((x, i) => `<circle cx="${x + 1}" cy="${i % 2 ? 16 : 20}" r="6.5" fill="${hc}"/>`).join("") }[a.hair] || "";
+  const eyes = { dots: `<circle cx="26" cy="32" r="2.2" fill="${INK}"/><circle cx="38" cy="32" r="2.2" fill="${INK}"/>`,
+    happy: `<path d="M23.5 33q2.5-3.5 5 0M35.5 33q2.5-3.5 5 0" ${line}/>`,
+    wink: `<circle cx="26" cy="32" r="2.2" fill="${INK}"/><path d="M35.5 32.5h5" ${line}/>`,
+    big: `<circle cx="26" cy="32" r="4" fill="#fff"/><circle cx="38" cy="32" r="4" fill="#fff"/><circle cx="26.8" cy="32.5" r="2" fill="${INK}"/><circle cx="38.8" cy="32.5" r="2" fill="${INK}"/>`,
+    sleepy: `<path d="M23.5 32q2.5 2 5 0M35.5 32q2.5 2 5 0" ${line}/>` }[a.eyes] || "";
+  const mouth = { smile: `<path d="M27 40q5 5 10 0" ${line}/>`,
+    grin: `<path d="M26 39h12a6 6 0 0 1-12 0z" fill="#fff" stroke="${INK}" stroke-width="1.6" stroke-linejoin="round"/>`,
+    open: `<ellipse cx="32" cy="42" rx="3.2" ry="4" fill="${INK}"/>`, flat: `<path d="M27 42h10" ${line}/>`,
+    tongue: `<ellipse cx="33.5" cy="43.2" rx="2.4" ry="2.8" fill="#ff6b8a"/><path d="M27 40q5 5 10 0" ${line}/>` }[a.mouth] || "";
+  const extra = { shades: `<g fill="#111"><rect x="21" y="28.5" width="10" height="7" rx="2.5"/><rect x="33" y="28.5" width="10" height="7" rx="2.5"/></g><path d="M31 31h2M17 30l4 .5M47 30l-4 .5" stroke="#111" stroke-width="1.6"/>`,
+    headphones: `<path d="M14 35v-5a18 18 0 0 1 36 0v5" fill="none" stroke="#222" stroke-width="3.5"/><rect x="10.5" y="29" width="7" height="12" rx="3" fill="#ef4444"/><rect x="46.5" y="29" width="7" height="12" rx="3" fill="#ef4444"/>`,
+    headband: `<rect x="15" y="21" width="34" height="5" rx="2.5" fill="#ef4444"/>`,
+    crown: `<path d="M21 15l2-10 5 6 4-8 4 8 5-6 2 10z" fill="#facc15" stroke="#b45309" stroke-width="1" stroke-linejoin="round"/>`,
+    beanie: `<path d="M15 26c0-11 7-16 17-16s17 5 17 16z" fill="#3b82f6"/><rect x="14" y="23" width="36" height="5" rx="2.5" fill="#2563eb"/><circle cx="32" cy="9" r="3.5" fill="#f8fafc"/>` }[a.extra] || "";
+  return `<svg viewBox="0 0 64 64" aria-hidden="true"><rect x="27" y="44" width="10" height="10" fill="${sk}"/>
+    <path d="M8 66c2-11 12-15 24-15s22 4 24 15z" fill="rgba(0,0,0,.3)"/>${back}${face}${front}${eyes}${mouth}${extra}</svg>`;
+}
+const randomAvatar = () => Object.fromEntries(Object.entries(S.me.avatar_parts || {}).map(([k, opts]) => [k, opts[Math.floor(Math.random() * opts.length)]]));
+const PART_LABEL = { face: "Face", skin: "Skin", hair: "Hair", hair_color: "Hair colour", eyes: "Eyes", mouth: "Mouth", extra: "Extra" };
+
+// the avatar builder: tap a part, see it straight away; Save keeps it (and the colour behind it)
+function editAvatar(after) {
+  const parts = S.me.avatar_parts || {};
+  let cur = { ...(S.me.avatar || avatarOf(S.me.who) || randomAvatar()) }, bg = S.me.color || (S.me.colors || [])[0];
+  const scrim = document.createElement("div"); scrim.className = "scrim";
+  const m = document.createElement("div"); m.className = "modal card avmodal";
+  const close = () => { scrim.remove(); m.remove(); };
+  scrim.onclick = close;
+  const draw = () => {
+    m.innerHTML = `<div class="row spread"><h2 style="margin:0">Your avatar</h2><button class="btn small" id="avx">Close</button></div>
+      <div class="avpreview"><span class="avatar art" style="background:${bg}">${avatarSVG(cur)}</span></div>
+      <div class="row" style="justify-content:center;gap:8px;margin-bottom:6px"><button class="btn small" id="avrand">Randomise</button>
+        ${avatarOf(S.me.who) ? `<button class="btn small" id="avnone">Use my initials</button>` : ""}</div>
+      <div class="avsec"><div class="faint">Background</div><div class="swatches">${(S.me.colors || []).map((c) =>
+        `<button class="swatch${c === bg ? " on" : ""}" data-bg="${c}" style="background:${c}" aria-label="Background colour"></button>`).join("")}</div></div>
+      ${Object.entries(parts).map(([k, opts]) => `<div class="avsec"><div class="faint">${PART_LABEL[k] || k}</div><div class="swatches">${opts.map((v) =>
+        k === "skin" || k === "hair_color"
+          ? `<button class="swatch${cur[k] === v ? " on" : ""}" data-part="${k}" data-v="${v}" style="background:${v}" aria-label="${PART_LABEL[k]}"></button>`
+          : `<button class="avopt${cur[k] === v ? " on" : ""}" data-part="${k}" data-v="${v}" title="${esc(v)}"><span class="avatar art" style="background:${bg}">${avatarSVG({ ...cur, [k]: v })}</span></button>`).join("")}</div></div>`).join("")}
+      <div class="row" style="margin-top:16px;justify-content:flex-end;gap:8px"><button class="btn" id="avcancel">Cancel</button><button class="btn primary" id="avsave">Save</button></div>`;
+    $("#avx", m).onclick = close; $("#avcancel", m).onclick = close;
+    $("#avrand", m).onclick = () => { cur = randomAvatar(); draw(); };
+    $$("[data-bg]", m).forEach((b) => b.onclick = () => { bg = b.dataset.bg; draw(); });
+    $$("[data-part]", m).forEach((b) => b.onclick = () => { cur[b.dataset.part] = b.dataset.v; draw(); });
+    const save = async (avatar) => {
+      try {
+        S.me = await post("/api/me", bg === S.me.color ? { avatar } : { avatar, color: bg });
+        await loadPeople(); close(); toast(avatar ? "Avatar saved" : "Back to your initials"); after && after();
+      } catch (e) { toast(e.message); }
+    };
+    $("#avsave", m).onclick = () => save(cur);
+    const none = $("#avnone", m); if (none) none.onclick = () => save(null);
+  };
+  draw();
+  document.body.append(scrim, m);
+}
+
+// ---------- profiles ----------
+const PARTS4 = ["guitar", "bass", "drums", "vocals"];
+const tierOf = (v) => (v && v !== "-1" ? v : "–");
+const tiersHTML = (t) => `<div class="tiers">${PARTS4.map((k) => `<span>${k} <b>${esc(tierOf((t || {})[k]))}</b></span>`).join("")}</div>`;
+const WHERE = { quickplay: `<span class="chip accent">Quickplay</span>`, staging: `<span class="chip">Staging</span>` };
+const fmtLen = (sec) => { const h = Math.floor(sec / 3600), m = Math.floor(sec / 60) % 60, s = String(sec % 60).padStart(2, "0"); return h ? `${h}:${String(m).padStart(2, "0")}:${s}` : `${m}:${s}`; };
+const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
+document.addEventListener("click", (e) => {
+  const b = e.target.closest("[data-band]");
+  if (b && !e.defaultPrevented) location.hash = "band?" + qs({ id: b.dataset.band });
+});
+let prof = { name: "", shown: 60, q: "", where: "all" };
+
+async function renderProfile() {
+  const name = hashArg("name");
+  if (pkey(name) !== pkey(prof.name)) prof = { name, shown: 60, q: "", where: "all" };
+  if (lastPage !== name) page(esc(name), "", `<div class="empty"><span class="spinner"></span></div>`);
+  let p;
+  try { [p] = await Promise.all([api("/api/profile?" + qs({ name })), S.peopleList.length ? null : loadPeople()]); }
+  catch (e) { page(esc(name), "", `<div class="card empty">${esc(e.message)}</div>`, `<button class="btn small" data-go="party">&larr; Party</button>`); return; }
+  if (view() !== "profile" || hashArg("name") !== name) return;
+  const n = (w) => p.songs.filter((s) => s.where === w).length;
+  page(esc(p.name), p.me ? "Your profile" : `${esc(p.name)}'s profile`, `
+    <div class="card profhead">${avatar(p.name, p.color, "huge" + (p.online ? " on" : ""), false)}
+      <div class="grow" style="min-width:0">
+        <div class="row wrap" style="gap:8px"><h2 style="margin:0">${esc(p.name)}</h2>${p.me ? `<span class="faint">(you)</span>` : ""}${p.owner ? `<span class="chip accent">Host</span>` : ""}</div>
+        <div class="faint">${p.online ? "Here now" : p.last ? `Last here ${since(p.last)}` : "Not seen yet"}</div>
+        <div class="stats"><span><b>${p.songs.length}</b> songs added</span><span><b>${p.hearts}</b> favourites</span><span><b>${p.bands.length}</b> ${p.bands.length === 1 ? "band" : "bands"}</span></div>
+        ${p.me ? `<div class="row wrap" style="gap:8px;margin-top:12px"><button class="btn small" id="profav">${p.avatar ? "Edit avatar" : "Make an avatar"}</button></div>` : ""}
+      </div></div>
+    <div class="card"><h2>Bands</h2>${p.bands.length ? `<div class="row wrap" style="gap:10px">${p.bands.map((b) =>
+      `<button class="bandchip" data-band="${esc(b.id)}"><b>${esc(b.name)}</b><span class="avstack">${b.members.slice(0, 5).map((m) => avatar(m, "", "", false)).join("")}</span></button>`).join("")}</div>`
+      : `<div class="faint">${p.me ? "Not in a band yet." : `${esc(p.name)} isn't in a band yet.`} <a href="#party" id="tobands">${p.me ? "Start one in Party &rarr; Bands" : "See the bands"}</a></div>`}</div>
+    <div class="card"><div class="row spread wrap" style="gap:10px;margin-bottom:6px"><h2 style="margin:0">Songs added</h2>
+        <div class="tabs">${[["all", `All ${p.songs.length}`], ["quickplay", `Quickplay ${n("quickplay")}`], ["staging", `Staging ${n("staging")}`]].map(([k, l]) =>
+          `<button class="${prof.where === k ? "on" : ""}" data-pw="${k}">${l}</button>`).join("")}</div></div>
+      <input id="profq" type="search" placeholder="Search ${esc(p.name)}'s songs" value="${esc(prof.q)}" style="width:100%;margin:8px 0 4px">
+      <div id="profsongs"></div></div>`, `<button class="btn small" data-go="party">&larr; Party</button>`);
+  const draw = () => {
+    const q = prof.q.toLowerCase().trim();
+    const songs = p.songs.filter((s) => (prof.where === "all" || s.where === prof.where) && (!q || `${s.title} ${s.artist} ${s.name}`.toLowerCase().includes(q)));
+    $("#profsongs").innerHTML = songs.length ? songs.slice(0, prof.shown).map((s) => `<div class="item songrow link" data-song="${esc(s.folder)}" data-where="${s.where}">
+        ${coverHTML(s, "setcover", 120)}
+        <div class="grow" style="min-width:0"><div class="t ellipsis">${esc(s.title || s.name)}</div><div class="faint ellipsis">${esc(s.artist || "Unknown artist")}</div>${tiersHTML(s.tiers)}</div>
+        ${WHERE[s.where]}</div>`).join("") + (songs.length > prof.shown ? `<div style="text-align:center;margin-top:12px"><button class="btn small" id="profmore">Show more (${songs.length - prof.shown} left)</button></div>` : "")
+      : `<div class="empty">${p.songs.length ? "No songs match." : `${p.me ? "You haven't" : `${esc(p.name)} hasn't`} added any songs yet.`}</div>`;
+    $$("[data-song]", $("#profsongs")).forEach((r) => r.onclick = () => openReview(r.dataset.song, r.dataset.where === "quickplay"));
+    const more = $("#profmore"); if (more) more.onclick = () => { prof.shown += 60; draw(); };
+  };
+  draw();
+  $("#profq").oninput = (e) => { prof.q = e.target.value; prof.shown = 60; draw(); };
+  $$("[data-pw]").forEach((b) => b.onclick = () => { prof.where = b.dataset.pw; $$("[data-pw]").forEach((x) => x.classList.toggle("on", x === b)); draw(); });
+  const av = $("#profav"); if (av) av.onclick = () => editAvatar(renderProfile);
+  const tb = $("#tobands"); if (tb) tb.onclick = () => { partyTab = "bands"; };
+}
+
+// ---------- bands ----------
+const bandOp = (id, body) => post("/api/bands/" + encodeURIComponent(id), body);
+const inBand = (b) => b.members.some((m) => pkey(m) === pkey(S.me.who));
+
+async function bandsHTML() {
+  const list = await api("/api/bands");
+  return `${list.length ? `<div class="people">${list.map((b) => `<div class="card bandcard link" data-band="${esc(b.id)}">
+      <div class="row spread" style="gap:8px"><b class="ellipsis">${esc(b.name)}</b>${inBand(b) ? `<span class="chip green">You're in it</span>` : ""}</div>
+      <div class="avstack" style="margin:10px 0">${b.members.map((m) => avatar(m, "", "", false)).join("")}</div>
+      <div class="faint">${plural(b.members.length, "member")} · ${plural(b.setlists.length, "set list")} · ${plural(b.setlists.reduce((t, s) => t + s.n, 0), "song")}</div></div>`).join("")}</div>`
+    : `<div class="card empty">No bands yet. Start one below, then add your friends.</div>`}
+    <div class="card"><h2>Start a band</h2>
+      <div class="row" style="gap:8px"><input id="bandname" class="grow" maxlength="40" placeholder="Band name"><button class="btn primary" id="bandnew">Start it</button></div>
+      <p class="faint" style="margin-bottom:0">You're its first member. Add people and build set lists on the band's page.</p></div>`;
+}
+function wireBands(body) {
+  const go = async () => {
+    try { const b = await post("/api/bands", { name: $("#bandname", body).value }); location.hash = "band?" + qs({ id: b.id }); }
+    catch (e) { toast(e.message); }
+  };
+  $("#bandnew", body).onclick = go;
+  $("#bandname", body).onkeydown = (e) => { if (e.key === "Enter") go(); };
+}
+
+let bandSel = "", bandQ = "";
+async function renderBand() {
+  const id = hashArg("id");
+  let b;
+  try { [b] = await Promise.all([api("/api/bands/" + encodeURIComponent(id)), S.peopleList.length ? null : loadPeople()]); }
+  catch (e) { page("Band", "", `<div class="card empty">${esc(e.message)}</div>`, `<button class="btn small" data-go="party">&larr; Party</button>`); return; }
+  if (view() !== "band" || hashArg("id") !== id) return;
+  const me = pkey(S.me.who), member = inBand(b), lead = owner() || pkey(b.by) === me, edit = member || owner();
+  if (!b.setlists.some((s) => s.id === bandSel)) bandSel = (b.setlists[0] || {}).id || "";
+  const sl = b.setlists.find((s) => s.id === bandSel);
+  const others = (S.peopleList || []).filter((p) => !b.members.some((m) => pkey(m) === pkey(p.name)));
+  page(esc(b.name), `Started by <b class="link" data-user="${esc(b.by)}">${esc(b.by)}</b> · ${plural(b.members.length, "member")}`, `
+    <div class="card"><h2>Members</h2><div class="members">${b.members.map((m) => `<div class="member">${avatar(m, "", "big")}
+        <div style="min-width:0"><b class="link ellipsis" data-user="${esc(m)}">${esc(m)}</b>${pkey(m) === pkey(b.by) ? `<div class="faint">Started it</div>` : ""}</div>
+        ${lead && pkey(m) !== me ? `<button class="btn small danger" data-kick="${esc(m)}" aria-label="Take ${esc(m)} out of the band">&#10005;</button>` : ""}</div>`).join("")}</div>
+      ${edit && others.length ? `<div class="row wrap" style="gap:8px;margin-top:14px"><select id="addmem">${others.map((p) => `<option value="${esc(p.name)}">${esc(p.name)}</option>`).join("")}</select>
+        <button class="btn small" id="addmembtn">Add to the band</button></div>` : ""}</div>
+    <div class="card"><div class="row spread wrap" style="gap:10px"><h2 style="margin:0">Set lists</h2>${edit ? `<button class="btn small" id="slnew">+ New set list</button>` : ""}</div>
+      ${b.setlists.length ? `<div class="tabs" style="margin-top:12px">${b.setlists.map((s) => `<button class="${s.id === bandSel ? "on" : ""}" data-sl="${esc(s.id)}">${esc(s.name)} <span class="faint">${s.songs.length}</span></button>`).join("")}</div>` : ""}
+      ${sl ? `<div class="row spread wrap" style="gap:10px;margin:14px 0 4px"><div><b>${esc(sl.name)}</b> <span class="faint">· ${plural(sl.songs.length, "song")}${sl.length ? ` · ${fmtLen(sl.length)}` : ""}</span></div>
+          ${edit ? `<div class="row" style="gap:6px"><button class="btn small" id="slren">Rename</button><button class="btn small danger" id="sldel">Delete</button></div>` : ""}</div>
+        ${sl.songs.length ? sl.songs.map((s, i) => `<div class="item setrow songrow${s.here ? " link" : ""}" ${s.here ? `data-song="${esc(s.folder)}" data-where="${s.where}"` : ""}>
+            <span class="setno">${i + 1}</span>${coverHTML(s, "setcover", 120)}
+            <div class="grow" style="min-width:0"><div class="t ellipsis">${esc(s.title)}</div><div class="faint ellipsis">${esc(s.artist || "Unknown artist")}${s.length ? ` · ${fmtLen(s.length)}` : ""}</div>
+              ${s.here ? tiersHTML(s.tiers) : `<span class="chip red">Not in your library any more</span>`}</div>
+            ${edit ? `<div class="row setbtns"><button class="btn small" data-mv="-1" data-i="${i}" aria-label="Move up" ${i ? "" : "disabled"}>&#8593;</button>
+              <button class="btn small" data-mv="1" data-i="${i}" aria-label="Move down" ${i < sl.songs.length - 1 ? "" : "disabled"}>&#8595;</button>
+              <button class="btn small danger" data-rm="${i}" aria-label="Take off the set list">&#10005;</button></div>` : ""}</div>`).join("")
+          : `<div class="empty">No songs on this set list yet.${edit ? " Search below, or tap <b>+ Band set list</b> on any song." : ""}</div>`}
+        ${edit ? `<div class="addsong"><input id="songq" type="search" placeholder="Add a song: search staging and Quickplay" value="${esc(bandQ)}" style="width:100%"><div id="songhits"></div></div>` : ""}`
+      : `<div class="empty">No set lists yet.</div>`}</div>`,
+    `<button class="btn small" data-go="party">&larr; Party</button>${lead ? `<button class="btn small" id="bren">Rename</button><button class="btn small danger" id="bdel">Delete band</button>` : ""}${member ? `<button class="btn small" id="bleave">Leave</button>` : ""}`);
+
+  const send = async (body, done) => {
+    try { const r = await bandOp(id, body); if (r.deleted) { partyTab = "bands"; location.hash = "party"; return; } if (done) done(r); renderBand(); }
+    catch (e) { toast(e.message); }
+  };
+  const ask = (q, v = "") => { const a = prompt(q, v); return a && a.trim() ? a.trim() : null; };
+  $$("[data-sl]").forEach((x) => x.onclick = () => { bandSel = x.dataset.sl; renderBand(); });
+  $$("[data-song]").forEach((r) => r.onclick = (e) => { if (!e.target.closest("button")) openReview(r.dataset.song, r.dataset.where === "quickplay"); });
+  $$("[data-mv]").forEach((x) => x.onclick = () => send({ op: "song_move", setlist: bandSel, index: +x.dataset.i, step: +x.dataset.mv }));
+  $$("[data-rm]").forEach((x) => x.onclick = () => send({ op: "song_remove", setlist: bandSel, index: +x.dataset.rm }));
+  $$("[data-kick]").forEach((x) => x.onclick = () => { if (confirm(`Take ${x.dataset.kick} out of ${b.name}?`)) send({ op: "remove_member", name: x.dataset.kick }); });
+  const on = (sel, fn) => { const el = $(sel); if (el) el.onclick = fn; };
+  on("#addmembtn", () => send({ op: "add_member", name: $("#addmem").value }, () => toast("Added to the band")));
+  on("#slnew", () => { const n = ask("Name the new set list", "Set " + (b.setlists.length + 1)); if (n) send({ op: "setlist_new", name: n }, (r) => { bandSel = r.setlists[r.setlists.length - 1].id; }); });
+  on("#slren", () => { const n = ask("Rename the set list", sl.name); if (n) send({ op: "setlist_rename", setlist: bandSel, name: n }); });
+  on("#sldel", () => { if (confirm(`Delete the set list “${sl.name}”?`)) send({ op: "setlist_delete", setlist: bandSel }); });
+  on("#bren", () => { const n = ask("Rename the band", b.name); if (n) send({ op: "rename", name: n }); });
+  on("#bdel", () => { if (confirm(`Delete ${b.name} and all its set lists?`)) send({ op: "delete" }); });
+  on("#bleave", () => { if (confirm(`Leave ${b.name}?`)) send({ op: "leave" }, () => toast(`You left ${b.name}`)); });
+
+  const q = $("#songq");
+  if (!q) return;
+  let timer;
+  const search = async () => {
+    bandQ = q.value;
+    const box = $("#songhits");
+    if (!bandQ.trim()) { box.innerHTML = ""; return; }
+    let hits;
+    try { hits = await api("/api/songs/find?" + qs({ q: bandQ, limit: 12 })); } catch (e) { box.innerHTML = `<p class="chip red">${esc(e.message)}</p>`; return; }
+    if (q.value !== bandQ) return;
+    const on = new Set(sl.songs.map((s) => s.key));
+    box.innerHTML = hits.length ? hits.map((s) => `<div class="item">${coverHTML(s, "setcover small", 120)}
+        <div class="grow" style="min-width:0"><div class="t ellipsis">${esc(s.title || s.name)}</div><div class="faint ellipsis">${esc(s.artist || "Unknown artist")}</div></div>
+        ${WHERE[s.where]}${on.has(s.key) ? `<span class="faint">On the list</span>` : `<button class="btn small" data-addsong="${esc(s.folder)}">+ Add</button>`}</div>`).join("")
+      : `<div class="faint" style="padding:8px 4px">No songs match.</div>`;
+    $$("[data-addsong]", box).forEach((x) => x.onclick = () => send({ op: "song_add", setlist: bandSel, folder: x.dataset.addsong }, () => toast("Added to " + sl.name)));
+  };
+  q.oninput = () => { clearTimeout(timer); timer = setTimeout(search, 200); };
+  if (bandQ) { search(); q.focus(); }
+}
+
+// from a song's drawer: pick one of your bands' set lists
+async function pickSetlist(s) {
+  let list;
+  try { list = (await api("/api/bands")).filter((b) => inBand(b) || owner()); } catch (e) { toast(e.message); return; }
+  const scrim = document.createElement("div"); scrim.className = "scrim pop";
+  const m = document.createElement("div"); m.className = "modal card pop";
+  const close = () => { scrim.remove(); m.remove(); };
+  scrim.onclick = close;
+  m.innerHTML = `<div class="row spread"><h2 style="margin:0">Add to a set list</h2><button class="btn small" id="pkx">Close</button></div>
+    <p class="faint">${esc(s.title || s.name)}</p>
+    ${list.length ? list.map((b) => `<div style="margin-top:10px"><b>${esc(b.name)}</b>${b.setlists.length ? b.setlists.map((sl) =>
+      `<div class="item"><span class="grow">${esc(sl.name)} <span class="faint">· ${plural(sl.n, "song")}</span></span><button class="btn small" data-pb="${esc(b.id)}" data-ps="${esc(sl.id)}">+ Add</button></div>`).join("")
+      : `<div class="faint">No set lists yet.</div>`}</div>`).join("")
+      : `<p>You're not in a band yet.</p><button class="btn primary" id="pkstart">Start a band</button>`}`;
+  document.body.append(scrim, m);
+  $("#pkx", m).onclick = close;
+  const st = $("#pkstart", m); if (st) st.onclick = () => { close(); closeDrawer(); partyTab = "bands"; location.hash = "party"; };
+  $$("[data-pb]", m).forEach((x) => x.onclick = async () => {
+    try { await bandOp(x.dataset.pb, { op: "song_add", setlist: x.dataset.ps, folder: s.folder }); toast("Added to the set list"); close(); }
+    catch (e) { toast(e.message); }
   });
 }
 

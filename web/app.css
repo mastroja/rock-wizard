@@ -539,3 +539,45 @@ body.glitching .shell, body.glitching .mobile-top { animation: screenglitch .45s
   .setbtns { width: 100%; }
   .tabbar button { font-size: 9.5px; }
 }
+
+/* ---------- profiles, avatars, bands ---------- */
+.link { cursor: pointer; }
+b.link:hover, span.link:hover { text-decoration: underline; }
+.card.link { transition: transform .15s, border-color .15s; }
+.card.link:hover { transform: translateY(-2px); border-color: var(--accent); }
+.avatar.art { overflow: hidden; }
+.avatar.art svg { width: 100%; height: 100%; display: block; }
+.avatar.huge { width: 96px; height: 96px; font-size: 34px; }
+.profhead { display: flex; gap: 20px; align-items: center; }
+.stats { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 10px; color: var(--muted); }
+.stats b { color: var(--text); font-size: 18px; }
+.songrow { gap: 12px; }
+.songrow.link:hover { background: var(--bg2); }
+.songrow .tiers { margin-top: 5px; flex-wrap: wrap; }
+.songrow > .chip { flex: none; }
+.setcover.small { width: 40px; height: 40px; border-radius: 8px; }
+.avstack { display: inline-flex; }
+.avstack .avatar { width: 28px; height: 28px; font-size: 11px; box-shadow: 0 0 0 2px var(--surface); }
+.avstack .avatar + .avatar { margin-left: -8px; }
+.bandchip { display: inline-flex; align-items: center; gap: 10px; border: 1px solid var(--border); background: var(--bg2); color: var(--text);
+  border-radius: 12px; padding: 8px 12px; cursor: pointer; font: inherit; transition: border-color .15s, transform .15s; }
+.bandchip:hover { border-color: var(--accent); transform: translateY(-1px); }
+.members { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; }
+.member { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.member > div { flex: 1; }
+.addsong { margin-top: 14px; }
+#addmem { background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 10px; padding: 7px 10px; font: inherit; min-width: 140px; }
+.avmodal { top: 16px; max-height: calc(100vh - 32px); overflow-y: auto; width: min(480px, calc(100vw - 24px)); }
+.avpreview { display: grid; place-items: center; margin: 14px 0 10px; }
+.avpreview .avatar { width: 120px; height: 120px; }
+.avsec { margin-top: 12px; }
+.avsec .faint { margin-bottom: 6px; }
+.avopt { border: 2px solid transparent; background: none; padding: 2px; border-radius: 50%; cursor: pointer; transition: transform .15s; }
+.avopt:hover { transform: scale(1.08); }
+.avopt.on { border-color: #fff; }
+.avopt .avatar { width: 46px; height: 46px; }
+@media (max-width: 760px) {
+  .profhead { flex-direction: column; text-align: center; }
+  .profhead .row, .profhead .stats { justify-content: center; }
+  .songrow > .chip { display: none; }
+}

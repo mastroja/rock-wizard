@@ -4,12 +4,15 @@
 - each person's colour,
 - the hall of shame (how often someone met the Taylor Swift checkpoint, and how it went),
 - hearts (each person's favourite songs),
-- tonight's setlist.
+- tonight's setlist,
+- each person's avatar, built from a few simple parts and drawn by the web app,
+- bands: a few people together, with their own set lists.
 
 A person is a name (the same name on two phones is the same person), compared without case.
 Songs are keyed by "artist|title" in lower case, so a renamed folder keeps its hearts.
 """
 import json
+import secrets
 import threading
 import time
 from pathlib import Path
@@ -31,7 +34,7 @@ def _d() -> dict:
         except (OSError, ValueError):
             _data = {}
         for key, empty in (("events", []), ("next_id", 1), ("rev", 0), ("profiles", {}), ("shame", {}),
-                           ("hearts", {}), ("setlist", [])):
+                           ("hearts", {}), ("setlist", []), ("bands", {})):
             _data.setdefault(key, empty)
     return _data
 
@@ -100,6 +103,42 @@ def set_color(name: str, color: str) -> str:
         _d()["profiles"].setdefault(key_of(name), {})["color"] = color
         _save()
     return color
+
+
+# An avatar is a choice from each list (the web app draws it; the background is the person's colour).
+AVATAR_PARTS = {
+    "face": ["round", "square", "long"],
+    "skin": ["#f9d7b9", "#eec09a", "#d9a074", "#b9784d", "#8d5a3b", "#5e3b28", "#9ae6b4", "#a5b4fc"],
+    "hair": ["none", "short", "long", "spiky", "mohawk", "curly", "bun"],
+    "hair_color": ["#1f1a17", "#5b3a22", "#a0662f", "#e8c26b", "#d9d4cf", "#c0392b", "#ec4899", "#3b82f6", "#10b981"],
+    "eyes": ["dots", "happy", "wink", "big", "sleepy"],
+    "mouth": ["smile", "grin", "open", "flat", "tongue"],
+    "extra": ["none", "shades", "headphones", "headband", "crown", "beanie"],
+}
+
+
+def avatar_of(name: str) -> dict | None:
+    with _lock:
+        a = (_d()["profiles"].get(key_of(name)) or {}).get("avatar")
+    return dict(a) if a else None
+
+
+def set_avatar(name: str, avatar: dict | None) -> dict | None:
+    """None goes back to the initials circle."""
+    if avatar is not None:
+        if not isinstance(avatar, dict):
+            raise ValueError("unknown avatar")
+        avatar = {k: str(avatar.get(k, opts[0])) for k, opts in AVATAR_PARTS.items()}
+        if any(v not in AVATAR_PARTS[k] for k, v in avatar.items()):
+            raise ValueError("unknown avatar part")
+    with _lock:
+        prof = _d()["profiles"].setdefault(key_of(name), {})
+        if avatar is None:
+            prof.pop("avatar", None)
+        else:
+            prof["avatar"] = avatar
+        _save()
+    return avatar
 
 
 def shame(name: str, event: str) -> dict:
@@ -195,4 +234,97 @@ def setlist_clear(played_only: bool = False) -> None:
     with _lock:
         d = _d()
         d["setlist"] = [s for s in d["setlist"] if played_only and not s["played"]]
+        _save()
+
+
+# ---------- bands ----------
+# {id: {"id", "name", "by" (who started it), "members": [names], "t",
+#       "setlists": [{"id", "name", "songs": [{"key", "folder", "title", "artist"}]}]}}
+# Songs are found again by key, so a song that moved from staging to Quickplay stays on the list.
+def _band(bid: str) -> dict:
+    b = _d()["bands"].get(bid)
+    if not b:
+        raise KeyError("That band doesn't exist any more")
+    return b
+
+
+def _setlist(b: dict, sid: str) -> dict:
+    s = next((s for s in b["setlists"] if s["id"] == sid), None)
+    if not s:
+        raise KeyError("That set list doesn't exist any more")
+    return s
+
+
+def _clean(name: str, what: str) -> str:
+    name = " ".join(str(name or "").split())[:40]
+    if not name:
+        raise ValueError(f"Please type a name for the {what}")
+    return name
+
+
+def bands() -> list[dict]:
+    with _lock:
+        return json.loads(json.dumps(sorted(_d()["bands"].values(), key=lambda b: b["t"])))
+
+
+def band(bid: str) -> dict:
+    with _lock:
+        return json.loads(json.dumps(_band(bid)))
+
+
+def is_member(b: dict, name: str) -> bool:
+    return key_of(name) in {key_of(m) for m in b["members"]}
+
+
+def band_create(name: str, by: str) -> dict:
+    with _lock:
+        bid = secrets.token_hex(4)
+        b = {"id": bid, "name": _clean(name, "band"), "by": by, "members": [by], "t": time.time(),
+             "setlists": [{"id": secrets.token_hex(4), "name": "Main set", "songs": []}]}
+        _d()["bands"][bid] = b
+        _save()
+        return json.loads(json.dumps(b))
+
+
+def band_edit(bid: str, op: str, **a) -> None:
+    """One change to a band; the server checks who may make it first."""
+    with _lock:
+        b = _band(bid)
+        if op == "rename":
+            b["name"] = _clean(a["name"], "band")
+        elif op == "delete":
+            del _d()["bands"][bid]
+        elif op == "add_member":
+            if is_member(b, a["name"]):
+                raise ValueError(f"{a['name']} is already in {b['name']}")
+            b["members"].append(a["name"])
+        elif op == "remove_member":
+            b["members"] = [m for m in b["members"] if key_of(m) != key_of(a["name"])]
+            if not b["members"]:
+                del _d()["bands"][bid]
+        elif op == "setlist_new":
+            b["setlists"].append({"id": secrets.token_hex(4), "name": _clean(a["name"], "set list"), "songs": []})
+        elif op == "setlist_rename":
+            _setlist(b, a["setlist"])["name"] = _clean(a["name"], "set list")
+        elif op == "setlist_delete":
+            _setlist(b, a["setlist"])
+            b["setlists"] = [s for s in b["setlists"] if s["id"] != a["setlist"]]
+        elif op == "song_add":
+            sl = _setlist(b, a["setlist"])
+            if any(x["key"] == a["song"]["key"] for x in sl["songs"]):
+                raise ValueError("That song is already on this set list")
+            sl["songs"].append(a["song"])
+        elif op in ("song_remove", "song_move"):
+            songs = _setlist(b, a["setlist"])["songs"]
+            i = int(a["index"])
+            if not 0 <= i < len(songs):
+                raise KeyError("That song isn't on the set list any more")
+            if op == "song_remove":
+                songs.pop(i)
+            else:
+                j = i + (1 if int(a["step"]) > 0 else -1)
+                if 0 <= j < len(songs):
+                    songs[i], songs[j] = songs[j], songs[i]
+        else:
+            raise ValueError("unknown change")
         _save()
