@@ -1664,13 +1664,18 @@ function editAvatar(after) {
   document.body.append(scrim, m);
 }
 
-// ---------- band logos: a shape, an icon and the band's name, drawn here ----------
+// ---------- band logos: an emblem, an icon and the band's name, drawn here; or an uploaded picture ----------
 let logoN = 0;
-const LOGO_FONTS = { block: ["Impact, 'Arial Black', 'Helvetica Neue', sans-serif", 400, true, 1], metal: ["'Old English Text MT', 'UnifrakturMaguntia', 'Times New Roman', serif", 700, false, 0],
+const LOGO_FONTS = {  // family, weight, capitals, letter spacing: phones fall back along each list
+  block: ["Impact, 'Arial Black', 'Helvetica Neue', sans-serif", 400, true, 1], metal: ["'Old English Text MT', 'UnifrakturMaguntia', 'Times New Roman', serif", 700, false, 0],
   serif: ["Georgia, 'Times New Roman', serif", 700, true, 2], script: ["'Brush Script MT', 'Segoe Script', 'Snell Roundhand', cursive", 700, false, 0],
   mono: ["'Courier New', Courier, monospace", 700, true, 1], round: ["'Trebuchet MS', 'Arial Rounded MT Bold', 'Avenir Next', sans-serif", 700, false, 0],
-  stencil: ["Stencil, 'Stencil Std', Impact, sans-serif", 400, true, 3] };
-const LOGO_ICONS = {
+  stencil: ["Stencil, 'Stencil Std', Impact, sans-serif", 400, true, 3], horror: ["Chiller, 'Papyrus', 'Bradley Hand', fantasy", 700, true, 1],
+  comic: ["'Comic Sans MS', 'Chalkboard SE', 'Marker Felt', cursive", 700, false, 0], western: ["'Rockwell Extra Bold', Rockwell, 'American Typewriter', serif", 700, true, 2],
+  tech: ["'OCR A Extended', Consolas, Menlo, monospace", 700, true, 3], marker: ["'Ink Free', 'Segoe Print', 'Marker Felt', cursive", 700, false, 0],
+  slab: ["'Arial Black', 'Rockwell Extra Bold', 'Helvetica Neue', sans-serif", 900, true, 0],
+};
+const LOGO_ICONS = {  // each drawn in a 48 x 48 box: c = icon colour, bg = what's behind it
   lightning: (c) => `<path d="M28 0L6 28h14l-6 20 26-30H26l8-18z" fill="${c}"/>`,
   guitar: (c, bg) => `<path d="M34 4l10 10-4 4-3-1-11 11c2 5 1 10-3 14-5 5-14 5-19 0s-5-14 0-19c4-4 9-5 14-3l11-11-1-3z" fill="${c}"/><circle cx="15" cy="33" r="4" fill="${bg}"/>`,
   skull: (c, bg) => `<path d="M24 2C12 2 4 10 4 21c0 7 3 11 7 14v9h26v-9c4-3 7-7 7-14C44 10 36 2 24 2z" fill="${c}"/><circle cx="15" cy="22" r="5" fill="${bg}"/><circle cx="33" cy="22" r="5" fill="${bg}"/><path d="M24 28l-3 5h6zM18 38v6M24 38v6M30 38v6" fill="${bg}" stroke="${bg}" stroke-width="2"/>`,
@@ -1682,76 +1687,181 @@ const LOGO_ICONS = {
   mic: (c) => `<rect x="16" y="0" width="16" height="27" rx="8" fill="${c}"/><path d="M9 20c0 9 7 15 15 15s15-6 15-15M24 35v9M15 46h18" fill="none" stroke="${c}" stroke-width="3.5" stroke-linecap="round"/>`,
   note: (c) => `<path d="M16 7l28-7v35a7 6 0 1 1-4-5.5V9L20 14v26a7 6 0 1 1-4-5.5z" fill="${c}"/>`,
   eye: (c, bg) => `<path d="M0 24C8 12 16 8 24 8s16 4 24 16c-8 12-16 16-24 16S8 36 0 24z" fill="${c}"/><circle cx="24" cy="24" r="9" fill="${bg}"/><circle cx="24" cy="24" r="4" fill="${c}"/>`,
+  moon: (c) => `<path d="M32 3a22 22 0 1 0 14 35A18 18 0 1 1 32 3z" fill="${c}"/>`,
+  planet: (c) => `<circle cx="24" cy="24" r="13" fill="${c}"/><ellipse cx="24" cy="24" rx="24" ry="7" fill="none" stroke="${c}" stroke-width="3" transform="rotate(-20 24 24)"/>`,
+  heart: (c) => heartAt(24, 25, 17, c),
+  sword: (c) => `<path d="M24 0l4 6v24h-8V6z" fill="${c}"/><rect x="11" y="29" width="26" height="5" rx="2.5" fill="${c}"/><rect x="21.5" y="34" width="5" height="9" fill="${c}"/><circle cx="24" cy="45" r="3" fill="${c}"/>`,
+  cassette: (c, bg) => `<rect x="1" y="7" width="46" height="32" rx="4" fill="${c}"/><rect x="8" y="12" width="32" height="13" rx="6.5" fill="${bg}"/><circle cx="15" cy="18.5" r="3.5" fill="${c}"/><circle cx="33" cy="18.5" r="3.5" fill="${c}"/><path d="M12 39l3-7h18l3 7z" fill="${bg}"/>`,
+  amp: (c, bg) => `<rect x="4" y="2" width="40" height="44" rx="4" fill="${c}"/><rect x="8" y="6" width="32" height="6" rx="1.5" fill="${bg}"/><circle cx="13" cy="9" r="1.6" fill="${c}"/><circle cx="19" cy="9" r="1.6" fill="${c}"/><circle cx="25" cy="9" r="1.6" fill="${c}"/><circle cx="24" cy="30" r="12" fill="${bg}"/><circle cx="24" cy="30" r="4" fill="${c}"/>`,
+  ghost: (c, bg) => `<path d="M24 2C13 2 6 10 6 21v25l6-5 6 5 6-5 6 5 6-5 6 5V21C42 10 35 2 24 2z" fill="${c}"/><circle cx="18" cy="20" r="3.5" fill="${bg}"/><circle cx="30" cy="20" r="3.5" fill="${bg}"/>`,
+  cat: (c, bg) => `<path d="M6 4l10 10h16L42 4v24c0 10-8 18-18 18S6 38 6 28z" fill="${c}"/><circle cx="17" cy="26" r="3" fill="${bg}"/><circle cx="31" cy="26" r="3" fill="${bg}"/><path d="M22 33h4l-2 3z" fill="${bg}"/>`,
+  alien: (c, bg) => `<path d="M24 2C11 2 4 11 4 20c0 13 12 26 20 26s20-13 20-26C44 11 37 2 24 2z" fill="${c}"/><path d="M9 20c5 0 11 3 12 9-6 1-11-3-12-9zM39 20c-5 0-11 3-12 9 6 1 11-3 12-9z" fill="${bg}"/>`,
+  horns: (c) => `<path d="M4 46C1 30 5 14 16 3c-3 13-2 24 7 33zM44 46c3-16-1-32-12-43 3 13 2 24-7 33z" fill="${c}"/>`,
+  rocket: (c, bg) => `<path d="M24 0c8 6 12 16 12 28l6 8v8l-8-4H14l-8 4v-8l6-8C12 16 16 6 24 0z" fill="${c}"/><circle cx="24" cy="20" r="5" fill="${bg}"/>`,
+  gem: (c, bg) => `<path d="M12 4h24l10 12-22 30L2 16z" fill="${c}"/><path d="M2 16h44M12 4l6 12 6-12 6 12 6-12M18 16l6 30 6-30" fill="none" stroke="${bg}" stroke-width="1.6" opacity=".55"/>`,
+  pick: (c) => `<path d="M24 46C14 36 4 22 4 12 4 5 12 2 24 2s20 3 20 10c0 10-10 24-20 34z" fill="${c}"/>`,
+  peace: (c) => `<circle cx="24" cy="24" r="20" fill="none" stroke="${c}" stroke-width="5"/><path d="M24 4v40M24 24L10 38M24 24l14 14" fill="none" stroke="${c}" stroke-width="5"/>`,
 };
-const LOGO_SHAPES = {
-  circle: `<circle cx="80" cy="72" r="60"/>`, shield: `<path d="M80 10l56 17v36c0 36-25 61-56 75c-31-14-56-39-56-75V27z"/>`,
-  hexagon: `<polygon points="80,8 136,40 136,104 80,136 24,104 24,40"/>`, diamond: `<polygon points="80,4 148,72 80,140 12,72"/>`,
-  star: `<polygon points="${starPts(80, 78, 74, 5, .5)}"/>`, banner: `<path d="M8 26h144l-14 46 14 46H8l14-46z"/>`,
-  burst: `<polygon points="${starPts(80, 72, 70, 14, .8)}"/>`, none: "",
+const OCT = Array.from({ length: 8 }, (_, i) => { const a = Math.PI / 8 + i * Math.PI / 4; return `${(80 + 66 * Math.cos(a)).toFixed(1)},${(72 + 66 * Math.sin(a)).toFixed(1)}`; }).join(" ");
+const LOGO_SHAPES = {  // the emblem, about 140 across, centred near (80, 72)
+  circle: `<circle cx="80" cy="72" r="62"/>`, ring: `<circle cx="80" cy="72" r="62"/>`, shield: `<path d="M80 8l58 17v38c0 37-26 62-58 76c-32-14-58-39-58-76V25z"/>`,
+  hexagon: `<polygon points="80,6 138,39 138,105 80,138 22,105 22,39"/>`, diamond: `<polygon points="80,2 150,72 80,142 10,72"/>`,
+  star: `<polygon points="${starPts(80, 80, 78, 5, .5)}"/>`, star6: `<polygon points="${starPts(80, 74, 72, 6, .62)}"/>`,
+  banner: `<path d="M6 24h148l-14 48 14 48H6l14-48z"/>`, burst: `<polygon points="${starPts(80, 72, 72, 14, .8)}"/>`,
+  pick: `<path d="M80 140C52 114 18 74 18 42 18 18 44 6 80 6s62 12 62 36c0 32-34 72-62 98z"/>`, octagon: `<polygon points="${OCT}"/>`,
+  triangle: `<polygon points="80,2 154,132 6,132"/>`, coffin: `<polygon points="54,2 106,2 132,40 114,142 46,142 28,40"/>`,
+  heart: `<path d="M80 142C38 114 6 84 6 48 6 24 24 8 46 8c15 0 27 8 34 20 7-12 19-20 34-20 22 0 40 16 40 40 0 36-32 66-74 94z"/>`, none: "",
 };
 const hashOf = (s) => [...String(s)].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7);
+const LOGO_DEFAULT_PARTS = { shape: ["circle", "shield", "hexagon", "star6", "pick", "octagon"], icon: ["lightning", "skull", "flame", "star", "guitar", "crown"],
+  font: ["block", "slab", "stencil", "western"], color1: ["#ef4444", "#f97316", "#8b5cf6", "#3b82f6", "#14b8a6", "#ec4899", "#111827"] };
 function defaultLogo(id) {  // every band has a logo; this one stands in until someone makes theirs
-  const P = S.me.logo_parts || {}, h = hashOf(id || "band"), at = (k, n) => (P[k] || [""])[(h >> n) % (P[k] || [""]).length];
-  return { shape: at("shape", 1) === "none" ? "circle" : at("shape", 1), icon: at("icon", 4) === "none" ? "lightning" : at("icon", 4), font: at("font", 8),
-    effect: "shadow", color1: at("color1", 11), color2: "#f8fafc", text_color: "#f8fafc" };
+  const h = hashOf(id || "band"), at = (k, n) => LOGO_DEFAULT_PARTS[k][(h >>> n) % LOGO_DEFAULT_PARTS[k].length];
+  return { shape: at("shape", 1), fill: "gradient", border: "solid", backdrop: "none", icon: at("icon", 5), layout: "middle", font: at("font", 9),
+    effect: "shadow", tilt: "none", color1: at("color1", 13), color2: "#facc15", text_color: "#f8fafc" };
 }
+const seeded = (seed) => { let x = seed || 1; return () => ((x = (x * 1103515245 + 12345) >>> 0) % 10000) / 10000; };
+
 function logoSVG(b, logo) {
-  const L = logo || b.logo || defaultLogo(b.id), id = "lg" + (++logoN);
+  const base = defaultLogo(b.id), L = { ...base, ...(logo || b.logo || {}) }, id = "lg" + (++logoN);
   const [family, weight, upper, spacing] = LOGO_FONTS[L.font] || LOGO_FONTS.block;
+  const c1 = L.color1, c2 = L.color2, tc = L.text_color, dark = shade(c1, .45), INKD = "#0b0c18";
+  const shapeEl = LOGO_SHAPES[L.shape] ?? LOGO_SHAPES.circle, hasShape = !!shapeEl;
+  // what sits behind the emblem
+  const rnd = seeded(hashOf(b.id || b.name));
+  const backdrop = { rays: `<g opacity=".45">${Array.from({ length: 16 }, (_, i) => { const a1 = i * Math.PI / 8, a2 = a1 + Math.PI / 16, p = (t) => `${(80 + 110 * Math.cos(t)).toFixed(1)},${(72 + 110 * Math.sin(t)).toFixed(1)}`; return `<polygon points="80,72 ${p(a1)} ${p(a2)}" fill="${c2}"/>`; }).join("")}</g>`,
+    glow: `<circle cx="80" cy="72" r="70" fill="${c2}" opacity=".75" filter="url(#${id}b)"/>`,
+    sparkles: [[14, 20, 9], [146, 26, 7], [8, 110, 6], [150, 100, 9], [30, 150, 5], [130, 148, 6], [80, 0, 6]].map(([x, y, r]) => `<polygon points="${starPts(x, y, r, 4, .3)}" fill="${c2}"/>`).join(""),
+    flames: `<g opacity=".95"><path d="M8 150c-6-30 8-46 14-62 2 16 8 20 12 26 0-22 8-40 20-52-2 22 8 30 12 40 4-14 10-24 14-30 4 6 10 16 14 30 4-10 14-18 12-40 12 12 20 30 20 52 4-6 10-10 12-26 6 16 20 32 14 62z" fill="#f97316"/><path d="M26 150c-4-18 4-28 8-36 2 10 6 12 8 16 2-14 6-24 12-30 0 14 6 18 8 24 4-10 8-16 12-20 4 4 8 10 12 20 2-6 8-10 8-24 6 6 10 16 12 30 2-4 6-6 8-16 4 8 12 18 8 36z" fill="#facc15"/></g>`,
+    bolts: `<path d="M22 4L2 70h18L8 140 50 52H30L44 4z" fill="${c2}"/><path d="M138 4l20 66h-18l12 70-42-88h20L116 4z" fill="${c2}"/>`,
+    wings: `<g fill="${c2}" opacity=".95"><path d="M60 60C40 30 14 22 0 26c8 6 12 12 12 18-6 0-10 2-12 6 8 2 14 6 16 12-6 0-10 4-10 8 8 0 14 2 18 6-4 2-6 6-6 10 16-2 32-8 46-22z"/><path d="M100 60c20-30 46-38 60-34-8 6-12 12-12 18 6 0 10 2 12 6-8 2-14 6-16 12 6 0 10 4 10 8-8 0-14 2-18 6 4 2 6 6 6 10-16-2-32-8-46-22z"/></g>` }[L.backdrop] || "";
+  // the emblem: a fill (and texture) clipped to the shape, then its border
+  const textures = { stripes: `<rect width="160" height="160" fill="url(#${id}ps)"/>`, dots: `<rect width="160" height="160" fill="url(#${id}pd)"/>`,
+    checker: `<rect width="160" height="160" fill="url(#${id}pc)"/>`, grunge: `<rect width="160" height="160" filter="url(#${id}n)" opacity=".55"/>`,
+    split: `<polygon points="160,0 160,160 0,160" fill="${shade(c1, .28)}"/>`,
+    rays: `<g opacity=".25">${Array.from({ length: 12 }, (_, i) => { const a1 = i * Math.PI / 6, a2 = a1 + Math.PI / 12, p = (t) => `${(80 + 120 * Math.cos(t)).toFixed(1)},${(72 + 120 * Math.sin(t)).toFixed(1)}`; return `<polygon points="80,72 ${p(a1)} ${p(a2)}" fill="#fff"/>`; }).join("")}</g>` };
+  const fillBase = L.fill === "gradient" ? `url(#${id}s)` : c1;
+  const border = { solid: `stroke="${dark}" stroke-width="4"`, double: null, thick: `stroke="${INKD}" stroke-width="8"`,
+    dashed: `stroke="${c2}" stroke-width="3.5" stroke-dasharray="9 6"`, studs: null, none: "" }[L.border] ?? `stroke="${dark}" stroke-width="4"`;
+  const outline = (attrs) => shapeEl.replace("/>", ` fill="none" ${attrs} stroke-linejoin="round"/>`);
+  const emblem = !hasShape ? "" : `<clipPath id="${id}c">${shapeEl}</clipPath><g clip-path="url(#${id}c)"><rect width="160" height="160" fill="${fillBase}"/>${textures[L.fill] || ""}</g>
+    ${L.shape === "ring" ? `<circle cx="80" cy="72" r="50" fill="none" stroke="${c2}" stroke-width="3"/>` : ""}
+    ${L.border === "double" ? outline(`stroke="${c2}" stroke-width="10"`) + outline(`stroke="${INKD}" stroke-width="4"`)
+      : L.border === "studs" ? outline(`stroke="${dark}" stroke-width="4"`) + outline(`stroke="${c2}" stroke-width="5" stroke-dasharray="0 13" stroke-linecap="round"`)
+      : border ? outline(border) : ""}`;
+  // where the icon and the name go
+  const lay = L.layout || "middle", hasIcon = L.icon !== "none" && LOGO_ICONS[L.icon];
+  const iconAt = { middle: [80, 46, .9], arc: [80, 92, 1.05], ribbon: [80, 50, 1], top: [80, 92, 1.05], below: [80, 66, 1.45] }[lay] || [80, 46, .9];
+  if (!b.name) { iconAt[1] = 72; iconAt[2] = 1.5; }
+  const icon = hasIcon ? `<g transform="translate(${iconAt[0]} ${iconAt[1]}) scale(${iconAt[2]}) translate(-24 -24)">${LOGO_ICONS[L.icon](c2, hasShape ? c1 : INKD)}</g>` : "";
   const text = upper ? (b.name || "").toUpperCase() : (b.name || "");
-  // the name goes across the middle of the emblem: one line, or two for a long name (split near the middle)
   let lines = [text];
-  if (text.length > 13 && text.includes(" ")) {
+  if (lay !== "arc" && text.length > 13 && text.includes(" ")) {  // a long name on two lines, split near the middle
     const gaps = [...text.matchAll(/ /g)].map((m) => m.index), mid = gaps.reduce((x, g) => (Math.abs(g - text.length / 2) < Math.abs(x - text.length / 2) ? g : x));
     lines = [text.slice(0, mid), text.slice(mid + 1)];
   }
   const longest = Math.max(...lines.map((l) => l.length), 1), wide = upper ? .64 : .56;
-  const fs = Math.max(13, Math.min(lines.length > 1 ? 34 : 42, 150 / (longest * wide + longest * spacing / 30)));
-  const ys = lines.length > 1 ? [104 - fs * .55, 104 + fs * .55] : [104];
-  const dark = shade(L.color1, .4), shapeFill = L.effect === "gradient" ? `url(#${id}s)` : L.color1;
-  const shape = L.shape === "none" ? "" : LOGO_SHAPES[L.shape].replace("/>", ` fill="${shapeFill}" stroke="${dark}" stroke-width="4" stroke-linejoin="round"/>`);
-  const icon = L.icon === "none" ? "" : `<g transform="translate(80 ${L.shape === "banner" ? 48 : 46}) scale(.9) translate(-24 -24)" opacity="${text ? .95 : 1}">${LOGO_ICONS[L.icon](L.color2, L.shape === "none" ? "#0b0c18" : L.color1)}</g>`;
-  const t = (extra) => lines.map((l, i) => {
-    const fit = l.length * fs * wide + l.length * spacing > 150 ? ` textLength="150" lengthAdjust="spacingAndGlyphs"` : "";
-    return `<text x="80" y="${ys[i].toFixed(1)}" text-anchor="middle" dominant-baseline="central" font-family="${family}" font-weight="${weight}" font-size="${fs.toFixed(1)}" letter-spacing="${spacing}"${fit} ${extra}>${esc(l)}</text>`;
-  }).join("");
-  const words = { plain: t(`fill="${L.text_color}"`),
-    outline: t(`fill="${L.text_color}" stroke="#0b0c18" stroke-width="5" paint-order="stroke" stroke-linejoin="round"`),
-    shadow: t(`fill="#000" opacity=".6" transform="translate(3 3)"`) + t(`fill="${L.text_color}" stroke="#0b0c18" stroke-width="2" paint-order="stroke"`),
-    glow: t(`fill="${L.text_color}" filter="url(#${id}g)"`) + t(`fill="${L.text_color}" stroke="#0b0c18" stroke-width="1.5" paint-order="stroke"`),
-    gradient: t(`fill="url(#${id}t)" stroke="#0b0c18" stroke-width="3" paint-order="stroke"`) }[L.effect] || "";
+  const room = lay === "ribbon" ? 138 : 150, cap = lay === "arc" ? 28 : lay === "ribbon" ? (lines.length > 1 ? 22 : 28) : lines.length > 1 ? 34 : 42;
+  const fs = Math.max(lay === "arc" ? 11 : 13, Math.min(cap, room / (longest * wide + longest * spacing / 30)));
+  const midY = { middle: 104, ribbon: 112, top: 34, below: 158 - fs * (lines.length > 1 ? 1.15 : .6) }[lay] ?? 104;
+  const ys = lines.length > 1 ? [midY - fs * .55, midY + fs * .55] : [midY];
+  const fitOf = (l, w) => (l.length * fs * wide + l.length * spacing > w ? ` textLength="${w}" lengthAdjust="spacingAndGlyphs"` : "");
+  const tilt = { up: `rotate(-8 80 ${midY})`, down: `rotate(8 80 ${midY})`, italic: `translate(0 ${midY}) skewX(-14) translate(0 ${-midY})` }[L.tilt] || "";
+  const font = `font-family="${family}" font-weight="${weight}" font-size="${fs.toFixed(1)}" letter-spacing="${spacing}"`;
+  const t = (extra, dx = 0, dy = 0) => lay === "arc"
+    ? `<text ${font} text-anchor="middle" ${extra} ${dx || dy ? `transform="translate(${dx} ${dy})"` : ""}><textPath href="#${id}a" startOffset="50%"${fitOf(text, 120)}>${esc(text)}</textPath></text>`
+    : lines.map((l, i) => `<text x="${80 + dx}" y="${(ys[i] + dy).toFixed(1)}" text-anchor="middle" dominant-baseline="central" ${font}${fitOf(l, room)} ${extra}>${esc(l)}</text>`).join("");
+  const drips = () => {  // paint running off the bottom of the letters
+    const w = Math.min(room, longest * fs * wide), y0 = ys[ys.length - 1] + fs * .3;
+    return Array.from({ length: Math.max(3, Math.round(w / 16)) }, () => { const x = 80 - w / 2 + rnd() * w, len = 5 + rnd() * 14, r = 1.6 + rnd() * 1.4;
+      return `<path d="M${(x - r).toFixed(1)} ${y0.toFixed(1)}v${len.toFixed(1)}a${r.toFixed(1)} ${r.toFixed(1)} 0 0 0 ${(2 * r).toFixed(1)} 0v${(-len).toFixed(1)}z" fill="${tc}"/>`; }).join("");
+  };
+  const words = !text ? "" : { plain: t(`fill="${tc}"`),
+    outline: t(`fill="${tc}" stroke="${INKD}" stroke-width="5" paint-order="stroke" stroke-linejoin="round"`),
+    shadow: t(`fill="#000" opacity=".6"`, 3, 3) + t(`fill="${tc}" stroke="${INKD}" stroke-width="2" paint-order="stroke"`),
+    glow: t(`fill="${tc}" filter="url(#${id}g)"`) + t(`fill="${tc}" stroke="${INKD}" stroke-width="1.5" paint-order="stroke"`),
+    gradient: t(`fill="url(#${id}t)" stroke="${INKD}" stroke-width="3" paint-order="stroke"`),
+    extrude: [5, 4, 3, 2, 1].map((d) => t(`fill="${shade(tc, .55)}" stroke="${INKD}" stroke-width="1"`, d, d)).join("") + t(`fill="${tc}" stroke="${INKD}" stroke-width="1.5" paint-order="stroke"`),
+    neon: t(`fill="none" stroke="${tc}" stroke-width="5" filter="url(#${id}g)"`) + t(`fill="#fff" stroke="${tc}" stroke-width="1.6" paint-order="stroke"`),
+    chrome: t(`fill="url(#${id}m)" stroke="${INKD}" stroke-width="3" paint-order="stroke" stroke-linejoin="round"`),
+    fire: t(`fill="#f97316" filter="url(#${id}g)"`) + t(`fill="url(#${id}f)" stroke="#7c2d12" stroke-width="2" paint-order="stroke"`),
+    drip: (lay === "arc" ? "" : drips()) + t(`fill="${tc}" stroke="${INKD}" stroke-width="1.5" paint-order="stroke"`),
+    double: t(`fill="${tc}" stroke="${c2}" stroke-width="9" paint-order="stroke" stroke-linejoin="round"`) + t(`fill="${tc}" stroke="${INKD}" stroke-width="3.5" paint-order="stroke" stroke-linejoin="round"`) }[L.effect] || t(`fill="${tc}"`);
+  const rh = Math.max(17, fs * (lines.length > 1 ? 1.15 : .8) + 5);  // the ribbon grows with the name on it
+  const ribbon = lay === "ribbon" && text ? `<path d="M2 ${(midY - rh).toFixed(1)}h156l-11 ${rh.toFixed(1)} 11 ${rh.toFixed(1)}H2l11-${rh.toFixed(1)}z" fill="${c2}" stroke="${INKD}" stroke-width="3" stroke-linejoin="round"/>` : "";
   return `<svg viewBox="0 0 160 160" aria-hidden="true"><defs>
-      <linearGradient id="${id}s" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${L.color1}"/><stop offset="1" stop-color="${dark}"/></linearGradient>
-      <linearGradient id="${id}t" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${L.text_color}"/><stop offset="1" stop-color="${L.color2}"/></linearGradient>
-      <filter id="${id}g" x="-20%" y="-50%" width="140%" height="200%"><feGaussianBlur stdDeviation="3.5"/></filter></defs>${shape}${icon}${words}</svg>`;
+      <linearGradient id="${id}s" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${c1}"/><stop offset="1" stop-color="${dark}"/></linearGradient>
+      <linearGradient id="${id}t" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${tc}"/><stop offset="1" stop-color="${c2}"/></linearGradient>
+      <linearGradient id="${id}m" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f8fafc"/><stop offset=".48" stop-color="#94a3b8"/><stop offset=".52" stop-color="#475569"/><stop offset="1" stop-color="#e2e8f0"/></linearGradient>
+      <linearGradient id="${id}f" x1="0" y1="1" x2="0" y2="0"><stop offset="0" stop-color="#dc2626"/><stop offset=".55" stop-color="#f97316"/><stop offset="1" stop-color="#fde047"/></linearGradient>
+      <pattern id="${id}ps" width="12" height="12" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="12" fill="${shade(c1, .22)}"/></pattern>
+      <pattern id="${id}pd" width="10" height="10" patternUnits="userSpaceOnUse"><circle cx="5" cy="5" r="2.4" fill="${shade(c1, .3)}"/></pattern>
+      <pattern id="${id}pc" width="20" height="20" patternUnits="userSpaceOnUse"><rect width="10" height="10" fill="${shade(c1, .25)}"/><rect x="10" y="10" width="10" height="10" fill="${shade(c1, .25)}"/></pattern>
+      <filter id="${id}n" x="0" y="0" width="100%" height="100%"><feTurbulence type="fractalNoise" baseFrequency=".85" numOctaves="2" seed="${hashOf(b.id) % 97}"/><feColorMatrix values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 -2.4 1.25"/></filter>
+      <filter id="${id}g" x="-30%" y="-60%" width="160%" height="220%"><feGaussianBlur stdDeviation="3.5"/></filter>
+      <filter id="${id}b" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="10"/></filter>
+      <path id="${id}a" d="M36 ${hasShape ? 74 : 70}A44 44 0 0 1 124 ${hasShape ? 74 : 70}" fill="none"/></defs>
+    ${backdrop}${emblem}${icon}${ribbon}${tilt ? `<g transform="${tilt}">${words}</g>` : words}</svg>`;
 }
-const LOGO_LABEL = { shape: "Shape", icon: "Icon", font: "Lettering", effect: "Letter effect", color1: "Shape colour", color2: "Icon colour", text_color: "Letter colour" };
-const randomLogo = () => Object.fromEntries(Object.entries(S.me.logo_parts || {}).map(([k, o]) => [k, pickOne(o)]));
+const bandArt = (b) => (b.image ? `<img src="/api/bands/${encodeURIComponent(b.id)}/image?v=${b.image}" alt="">` : logoSVG(b));
+const LOGO_LABEL = { shape: "Shape", fill: "Fill and texture", border: "Border", backdrop: "Behind it", icon: "Icon", layout: "Where the name goes", font: "Lettering",
+  effect: "Letter effect", tilt: "Tilt", color1: "Shape colour", color2: "Icon and trim colour", text_color: "Letter colour" };
+const LOGO_TABS = [["emblem", "Emblem", ["shape", "fill", "border", "backdrop", "color1"]], ["icon", "Icon", ["icon", "color2"]],
+  ["words", "Lettering", ["layout", "font", "effect", "tilt", "text_color"]], ["picture", "Picture", []]];
+const randomLogo = () => {
+  const P = S.me.logo_parts || {}, r = Object.fromEntries(Object.entries(P).map(([k, o]) => [k, pickOne(o)]));
+  if (Math.random() < .5) r.backdrop = "none";  // busy enough most of the time without one
+  while (r.text_color === r.color1) r.text_color = pickOne(P.text_color || ["#f8fafc"]);
+  return r;
+};
 
-// the logo builder (any member): same layout as the avatar builder
+// the logo builder (any member): same layout as the avatar builder, with a Picture tab for an upload
 function editLogo(b, after) {
   const parts = S.me.logo_parts || {};
-  let cur = { ...(b.logo || defaultLogo(b.id)) };
+  let cur = { ...defaultLogo(b.id), ...(b.logo || {}) }, tab = b.image ? "picture" : "emblem", busy = false, changed = false;
   const scrim = document.createElement("div"); scrim.className = "scrim";
   const m = document.createElement("div"); m.className = "modal card avmodal";
-  const close = () => { scrim.remove(); m.remove(); };
+  const close = () => { scrim.remove(); m.remove(); if (changed && after) after(); };
   scrim.onclick = close;
   const draw = () => {
-    const keep = $(".avbody", m) ? $(".avbody", m).scrollTop : 0;
-    m.innerHTML = `<div class="avtop"><div class="row spread"><h2 style="margin:0">${esc(b.name)} logo</h2><button class="btn small" id="lgx">Close</button></div>
-        <div class="avpreview"><span class="bandlogo huge">${logoSVG(b, cur)}</span></div></div>
-      <div class="avbody">${Object.entries(parts).map(([k, opts]) => `<div class="avsec"><div class="faint">${LOGO_LABEL[k] || k}</div><div class="swatches">${opts.map((v) =>
-        k.includes("color") ? `<button class="swatch${cur[k] === v ? " on" : ""}" data-lp="${k}" data-v="${v}" style="background:${v}" aria-label="${LOGO_LABEL[k]}"></button>`
-          : `<button class="logoopt${cur[k] === v ? " on" : ""}" data-lp="${k}" data-v="${v}" title="${esc(v)}"><span class="bandlogo">${logoSVG(b, { ...cur, [k]: v })}</span></button>`).join("")}</div></div>`).join("")}</div>
-      <div class="avfoot"><button class="btn" id="lgrand">Randomise</button>${b.logo ? `<button class="btn" id="lgreset">Default</button>` : ""}<span class="grow"></span>
-        <button class="btn" id="lgcancel">Cancel</button><button class="btn primary" id="lgsave">Save</button></div>`;
-    $(".avbody", m).scrollTop = keep;
-    $("#lgx", m).onclick = close; $("#lgcancel", m).onclick = close;
-    $("#lgrand", m).onclick = () => { cur = randomLogo(); draw(); };
+    const keep = $(".avbody", m) ? $(".avbody", m).scrollTop : 0, sameTab = m.dataset.tab === tab;
+    m.dataset.tab = tab;
+    const preview = tab === "picture" && b.image ? bandArt(b) : logoSVG(b, cur);
+    const body = tab === "picture"
+      ? `<div class="avsec"><p style="margin-top:0">Use a picture as the band's logo instead: a PNG with a see-through background looks best. It's kept on ${S.me.local ? "this" : "the host's"} PC.</p>
+          <div class="row wrap" style="gap:8px"><button class="btn primary" id="lgup" ${busy ? "disabled" : ""}>${busy ? "Uploading…" : b.image ? "Upload a different picture" : "Upload a picture"}</button>
+            ${b.image ? `<button class="btn" id="lgimgx">Remove picture</button>` : ""}</div><input type="file" id="lgfile" accept="image/*" hidden>
+          ${b.image ? `<p class="faint">Pick another tab and press Save to go back to a built logo.</p>` : ""}</div>`
+      : LOGO_TABS.find(([k]) => k === tab)[2].map((k) => `<div class="avsec"><div class="faint">${LOGO_LABEL[k] || k}</div><div class="swatches">${(parts[k] || []).map((v) =>
+          k.includes("color") ? `<button class="swatch${cur[k] === v ? " on" : ""}" data-lp="${k}" data-v="${v}" style="background:${v}" aria-label="${LOGO_LABEL[k]}"></button>`
+            : `<button class="logoopt${cur[k] === v ? " on" : ""}" data-lp="${k}" data-v="${v}" title="${esc(v)}"><span class="bandlogo">${logoSVG(b, { ...cur, [k]: v })}</span></button>`).join("")}</div></div>`).join("");
+    m.innerHTML = `<div class="avtop"><div class="row spread"><h2 style="margin:0" class="ellipsis">${esc(b.name)} logo</h2><button class="btn small" id="lgx">Close</button></div>
+        <div class="avpreview"><span class="bandlogo huge">${preview}</span></div>
+        <div class="tabs avtabs">${LOGO_TABS.map(([k, l]) => `<button class="${tab === k ? "on" : ""}" data-lgtab="${k}">${l}</button>`).join("")}</div></div>
+      <div class="avbody">${body}</div>
+      <div class="avfoot">${tab === "picture" ? `<button class="btn primary" id="lgdone">Done</button>` : `<button class="btn" id="lgrand">Randomise</button>
+        ${b.logo || b.image ? `<button class="btn" id="lgreset">Default</button>` : ""}<span class="grow"></span>
+        <button class="btn" id="lgcancel">Cancel</button><button class="btn primary" id="lgsave">Save</button>`}</div>`;
+    if (sameTab) $(".avbody", m).scrollTop = keep;
+    const on = (sel, fn) => { const el = $(sel, m); if (el) el.onclick = fn; };
+    on("#lgx", close); on("#lgcancel", close); on("#lgdone", () => { changed = true; close(); });
+    on("#lgrand", () => { cur = randomLogo(); draw(); });
+    $$("[data-lgtab]", m).forEach((x) => x.onclick = () => { tab = x.dataset.lgtab; draw(); });
     $$("[data-lp]", m).forEach((x) => x.onclick = () => { cur[x.dataset.lp] = x.dataset.v; draw(); });
-    const save = async (logo) => { try { await bandOp(b.id, { op: "logo", logo }); close(); toast("Logo saved"); after && after(); } catch (e) { toast(e.message); } };
-    $("#lgsave", m).onclick = () => save(cur);
-    const r = $("#lgreset", m); if (r) r.onclick = () => save(null);
+    const save = async (logo) => { try { await bandOp(b.id, { op: "logo", logo }); changed = true; close(); toast("Logo saved"); } catch (e) { toast(e.message); } };
+    on("#lgsave", () => save(cur));
+    on("#lgreset", () => save(null));
+    on("#lgup", () => $("#lgfile", m).click());
+    const file = $("#lgfile", m);
+    if (file) file.onchange = async (e) => {
+      const f = e.target.files[0]; if (!f) return;
+      const fd = new FormData(); fd.append("file", f);
+      busy = true; draw();
+      try { b = await api(`/api/bands/${encodeURIComponent(b.id)}/image`, { method: "POST", body: fd }); changed = true; toast("Picture saved"); }
+      catch (err) { toast(err.message); }
+      busy = false; draw();
+    };
+    on("#lgimgx", async () => { try { b = await bandOp(b.id, { op: "image_remove" }); changed = true; toast("Picture removed"); draw(); } catch (e) { toast(e.message); } });
   };
   draw();
   document.body.append(scrim, m);
@@ -1826,7 +1936,7 @@ async function renderProfile() {
         ${p.me ? `<div class="row wrap" style="gap:8px;margin-top:12px"><button class="btn small" id="profav">${p.avatar || p.photo ? "Edit avatar" : "Make an avatar"}</button></div>` : ""}
       </div></div>
     <div class="card"><h2>Bands</h2>${p.bands.length ? `<div class="row wrap" style="gap:10px">${p.bands.map((b) =>
-      `<button class="bandchip" data-band="${esc(b.id)}"><span class="bandlogo tiny">${logoSVG(b)}</span><b>${esc(b.name)}</b><span class="avstack">${b.members.slice(0, 5).map((m) => avatar(m, "", "", false)).join("")}</span></button>`).join("")}</div>`
+      `<button class="bandchip" data-band="${esc(b.id)}"><span class="bandlogo tiny">${bandArt(b)}</span><b>${esc(b.name)}</b><span class="avstack">${b.members.slice(0, 5).map((m) => avatar(m, "", "", false)).join("")}</span></button>`).join("")}</div>`
       : `<div class="faint">${p.me ? "Not in a band yet." : `${esc(p.name)} isn't in a band yet.`} <a href="#party" id="tobands">${p.me ? "Start one in Party &rarr; Bands" : "See the bands"}</a></div>`}</div>
     <div class="card"><div class="row spread wrap" style="gap:10px;margin-bottom:6px"><h2 style="margin:0">Songs added</h2>
         <div class="tabs">${[["all", `All ${p.songs.length}`], ["quickplay", `Quickplay ${n("quickplay")}`], ["staging", `Staging ${n("staging")}`]].map(([k, l]) =>
@@ -1857,7 +1967,7 @@ const inBand = (b) => b.members.some((m) => pkey(m) === pkey(S.me.who));
 
 async function bandsHTML() {
   const list = await api("/api/bands");
-  return `${list.length ? `<div class="people">${list.map((b) => `<div class="card bandcard link" data-band="${esc(b.id)}"><span class="bandlogo">${logoSVG(b)}</span>
+  return `${list.length ? `<div class="people">${list.map((b) => `<div class="card bandcard link" data-band="${esc(b.id)}"><span class="bandlogo">${bandArt(b)}</span>
       <div class="grow" style="min-width:0"><div class="row spread" style="gap:8px"><b class="ellipsis">${esc(b.name)}</b>${inBand(b) ? `<span class="chip green">You're in it</span>` : ""}</div>
       <div class="avstack" style="margin:8px 0">${b.members.map((m) => avatar(m, "", "", false)).join("")}</div>
       <div class="faint">${plural(b.members.length, "member")} · ${plural(b.setlists.length, "set list")} · ${plural(b.setlists.reduce((t, s) => t + s.n, 0), "song")}</div></div></div>`).join("")}</div>`
@@ -1889,10 +1999,10 @@ async function renderBand() {
   const sl = b.setlists.find((s) => s.id === bandSel);
   const others = (S.peopleList || []).filter((p) => !b.members.some((m) => pkey(m) === pkey(p.name)));
   page(esc(b.name), `Started by <b class="link" data-user="${esc(b.by)}">${esc(b.by)}</b> · ${plural(b.members.length, "member")}`, `
-    <div class="card bandhero"><span class="bandlogo big${edit ? " link" : ""}" ${edit ? `id="logoimg" title="Edit the logo"` : ""}>${logoSVG(b)}</span>
+    <div class="card bandhero"><span class="bandlogo big${edit ? " link" : ""}" ${edit ? `id="logoimg" title="Edit the logo"` : ""}>${bandArt(b)}</span>
       <div class="grow" style="min-width:0"><div class="stats" style="margin-top:0"><span><b>${b.members.length}</b> ${b.members.length === 1 ? "member" : "members"}</span>
         <span><b>${b.setlists.length}</b> set ${b.setlists.length === 1 ? "list" : "lists"}</span><span><b>${b.setlists.reduce((t, s) => t + s.songs.length, 0)}</b> songs</span></div>
-        ${edit ? `<div class="row wrap" style="gap:8px;margin-top:12px"><button class="btn small" id="logoedit">${b.logo ? "Edit logo" : "Make a logo"}</button></div>` : ""}</div></div>
+        ${edit ? `<div class="row wrap" style="gap:8px;margin-top:12px"><button class="btn small" id="logoedit">${b.logo || b.image ? "Edit logo" : "Make a logo"}</button></div>` : ""}</div></div>
     <div class="card"><h2>Members</h2><div class="members">${b.members.map((m) => `<div class="member">${avatar(m, "", "big")}
         <div style="min-width:0"><b class="link ellipsis" data-user="${esc(m)}">${esc(m)}</b>${pkey(m) === pkey(b.by) ? `<div class="faint">Started it</div>` : ""}</div>
         ${lead && pkey(m) !== me ? `<button class="btn small danger" data-kick="${esc(m)}" aria-label="Take ${esc(m)} out of the band">&#10005;</button>` : ""}</div>`).join("")}</div>

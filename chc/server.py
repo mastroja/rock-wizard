@@ -1476,7 +1476,7 @@ def profile(name: str, request: Request):
              "shame": social.shame_of(n)}
     if p is None:
         raise HTTPException(404, f"Nobody called {name} has been here")
-    mine = [{"id": b["id"], "name": b["name"], "members": b["members"], "logo": b.get("logo")}
+    mine = [{"id": b["id"], "name": b["name"], "members": b["members"], "logo": b.get("logo"), "image": b.get("image", 0)}
             for b in social.bands() if social.is_member(b, p["name"])]
     return p | {"songs": songs, "bands": mine}
 
@@ -1550,6 +1550,13 @@ async def band_change(bid: str, req: Request):
     member = social.is_member(band, name)
     lead = is_owner(req) or social.key_of(band["by"]) == social.key_of(name)
     args = {k: b[k] for k in ("name", "setlist", "index", "step", "logo") if k in b}
+    if op == "image":
+        raise HTTPException(400, "unknown change")
+    if op == "image_remove":  # back to the built logo
+        if not (member or is_owner(req)):
+            raise HTTPException(403, "Only the band's members can change it")
+        band_image_path(bid).unlink(missing_ok=True)
+        op, args = "image", {"version": 0}
     if op == "leave":
         if not member:
             raise HTTPException(400, "You're not in this band")
@@ -1573,10 +1580,58 @@ async def band_change(bid: str, req: Request):
         raise HTTPException(400, str(e.args[0]) if e.args else "That didn't work")
     if op == "add_member":
         social.log("band", name, f"added {args['name']} to {band['name']}", band=bid, **{"for": args["name"]})
+    if op == "logo" and band.get("image"):  # a built logo takes over from the picture
+        band_image_path(bid).unlink(missing_ok=True)
+        social.band_edit(bid, "image", version=0)
     try:
         return _band_out(social.band(bid))
     except KeyError:
+        band_image_path(bid).unlink(missing_ok=True)
         return {"deleted": True}
+
+
+BAND_IMAGES = Path.home() / ".rockwizard_bands"
+
+
+def band_image_path(bid: str) -> Path:
+    return BAND_IMAGES / (re.sub(r"[^0-9a-zA-Z_-]", "", bid)[:32] + ".png")
+
+
+@app.post("/api/bands/{bid}/image")
+async def band_image_set(bid: str, request: Request, file: UploadFile = File(...)):
+    """A picture as the band's logo (any member, or the host): made at most 512 px, transparency kept."""
+    try:
+        band = social.band(bid)
+    except KeyError as e:
+        raise HTTPException(404, str(e.args[0]))
+    if not (social.is_member(band, who(request)) or is_owner(request)):
+        raise HTTPException(403, "Only the band's members can change it")
+    data = await file.read(PHOTO_MAX_BYTES + 1)
+    if len(data) > PHOTO_MAX_BYTES:
+        raise HTTPException(413, "That picture is too big (25 MB at most)")
+    try:
+        import io
+        from PIL import Image, ImageOps
+        img = Image.open(io.BytesIO(data))
+        if img.width * img.height > 60_000_000:
+            raise ValueError("too many pixels")
+        img = ImageOps.exif_transpose(img).convert("RGBA")
+        img.thumbnail((512, 512), Image.LANCZOS)
+        BAND_IMAGES.mkdir(parents=True, exist_ok=True)
+        img.save(band_image_path(bid), "PNG", optimize=True)
+    except Exception as e:
+        raise HTTPException(400, f"That file isn't a picture RockWizard can read ({e.__class__.__name__}). "
+                                 "Try a JPG or PNG.")
+    social.band_edit(bid, "image", version=int(time.time() * 1000))
+    return _band_out(social.band(bid))
+
+
+@app.get("/api/bands/{bid}/image")
+def band_image_get(bid: str):
+    f = band_image_path(bid)
+    if not f.exists():
+        raise HTTPException(404)
+    return FileResponse(f, media_type="image/png", headers={"Cache-Control": "max-age=604800"})
 
 
 def song_ref(folder: str) -> tuple[Path, str, str, str]:

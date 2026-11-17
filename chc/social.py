@@ -287,11 +287,20 @@ def setlist_clear(played_only: bool = False) -> None:
 # A band's logo, like an avatar, is a choice from each list (the web app draws it with the band's name).
 LOGO_COLORS = ["#ef4444", "#f97316", "#facc15", "#22c55e", "#14b8a6", "#3b82f6", "#8b5cf6", "#ec4899", "#f8fafc",
                "#9ca3af", "#111827", "#78350f"]
-LOGO_PARTS = {
-    "shape": ["circle", "shield", "hexagon", "diamond", "star", "banner", "burst", "none"],
-    "icon": ["lightning", "guitar", "skull", "flame", "star", "crown", "wings", "drums", "mic", "note", "eye", "none"],
-    "font": ["block", "metal", "serif", "script", "mono", "round", "stencil"],
-    "effect": ["plain", "outline", "shadow", "glow", "gradient"],
+LOGO_PARTS = {  # the first choice of a part is what a logo saved before that part existed gets
+    "shape": ["circle", "shield", "hexagon", "diamond", "star", "banner", "burst", "none", "pick", "ring", "octagon",
+              "triangle", "heart", "coffin", "star6"],
+    "fill": ["solid", "gradient", "split", "stripes", "dots", "checker", "grunge", "rays"],
+    "border": ["solid", "double", "thick", "dashed", "studs", "none"],
+    "backdrop": ["none", "rays", "glow", "sparkles", "flames", "bolts", "wings"],
+    "icon": ["lightning", "guitar", "skull", "flame", "star", "crown", "wings", "drums", "mic", "note", "eye", "none",
+             "moon", "planet", "heart", "sword", "cassette", "amp", "ghost", "cat", "alien", "horns", "rocket", "gem",
+             "pick", "peace"],
+    "layout": ["middle", "arc", "ribbon", "top", "below"],
+    "font": ["block", "metal", "serif", "script", "mono", "round", "stencil", "horror", "comic", "western", "tech",
+             "marker", "slab"],
+    "effect": ["plain", "outline", "shadow", "glow", "gradient", "extrude", "neon", "chrome", "fire", "drip", "double"],
+    "tilt": ["none", "up", "down", "italic"],
     "color1": LOGO_COLORS, "color2": LOGO_COLORS, "text_color": LOGO_COLORS,
 }
 
@@ -366,6 +375,11 @@ def band_edit(bid: str, op: str, **a) -> None:
                 b.pop("logo", None)
             else:
                 b["logo"] = _logo_clean(a["logo"])
+        elif op == "image":  # an uploaded picture used as the logo (the file is kept by server.py)
+            if a.get("version"):
+                b["image"] = int(a["version"])
+            else:
+                b.pop("image", None)
         elif op == "add_member":
             if is_member(b, a["name"]):
                 raise ValueError(f"{a['name']} is already in {b['name']}")

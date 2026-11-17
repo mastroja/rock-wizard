@@ -575,7 +575,8 @@ b.link:hover, span.link:hover { text-decoration: underline; }
 .avtabs { margin: 0 auto; }
 .avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .bandlogo { width: 64px; height: 64px; flex: none; display: inline-block; }
-.bandlogo svg { width: 100%; height: 100%; display: block; overflow: visible; }
+.bandlogo svg { width: 100%; height: 100%; display: block; overflow: hidden; }
+.bandlogo img { width: 100%; height: 100%; object-fit: contain; display: block; }
 .bandlogo.tiny { width: 30px; height: 30px; }
 .bandlogo.big { width: 120px; height: 120px; }
 .bandlogo.huge { width: 150px; height: 150px; }
