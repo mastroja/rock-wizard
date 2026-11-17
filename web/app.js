@@ -1065,12 +1065,13 @@ function renderLibrary() {
 // ---------- what charted a song (song.ini chc_models / chc_engine, chc.version) ----------
 const BEHIND = { guitar: "new guitar model", bass: "new bass model", drums: "new drum model", beats: "new beat model", charting: "newer charting" };
 const STEM_NAME = { sw: "BS-RoFormer guitar stem", s6: "Demucs 6-stem guitar", ft: "Demucs “everything else” stem" };
+const BASS_STEM_NAME = { sw: "BS-RoFormer bass stem", ft: "Demucs bass stem" };
 const behindChips = (v) => (v.upgrades && v.upgrades.length ? v.upgrades : v.outdated.map((k) => BEHIND[k] || k))
   .map((t) => `<span class="chip yellow">${esc(t)}</span>`).join(" ");
 
 function versionHTML(s) {
   const v = s.version, m = v.models;
-  const rows = [["Guitar", m.guitar && (m.guitar + (v.stems ? ` · ${STEM_NAME[v.stems] || v.stems}` : ""))], ["Bass", m.bass], ["Drums", m.drums],
+  const rows = [["Guitar", m.guitar && (m.guitar + (v.stems ? ` · ${STEM_NAME[v.stems] || v.stems}` : ""))], ["Bass", m.bass && (m.bass + (v.bass_stems ? ` · ${BASS_STEM_NAME[v.bass_stems] || v.bass_stems}` : ""))], ["Drums", m.drums],
     ["Beats", m.beats], ["Vocals", v.vocals], ["Charting", `version ${v.engine}${v.engine_note ? ` · ${v.engine_note}` : ""}`], ["Charted", v.charted]]
     .filter(([, val]) => val);
   return `<details class="card fold" style="margin-top:12px"><summary><h2>Charted with</h2>

@@ -663,13 +663,15 @@ def run(folder: Path, plan: dict, on_step=lambda i: None, on_progress=lambda f: 
                 stems = {n: audio.to_wav(folder / f"{n}.ogg", work / f"{n}.wav") for n in (*INSTS, "vocals")}
             else:
                 wav = audio.to_wav(next(folder / n for n in SONG_AUDIO if (folder / n).exists()), work / "input.wav")
-                extra = pipeline.guitar_stem_source() if plan["guitar"]["expert"] == "ai" else ""
+                ai = plan["guitar"]["expert"] == "ai" or plan["bass"]["expert"] == "ai"
+                extra = pipeline.extra_stems() if ai else False
                 span = 0.4 if extra else 0.55
                 pipeline._separate(wav, work, "htdemucs_ft", lambda f: on_progress(0.05 + span * f), stop)
-                guitar = work / "other.wav"
+                guitar, bass = work / "other.wav", work / "bass.wav"
                 if extra:
-                    guitar = pipeline.guitar_stem(wav, work, guitar, lambda f: on_progress(0.45 + 0.15 * f), stop)
-                stems = {"guitar": guitar, "bass": work / "bass.wav", "drums": work / "drums.wav",
+                    guitar, bass = pipeline.model_stems(wav, work, guitar, bass,
+                                                        lambda f: on_progress(0.45 + 0.15 * f), stop)
+                stems = {"guitar": guitar, "bass": bass, "drums": work / "drums.wav",
                          "vocals": work / "vocals.wav"}
             check()
         on_step(2)

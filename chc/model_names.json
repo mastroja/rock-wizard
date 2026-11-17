@@ -12,6 +12,7 @@
   "a713d590": {"name": "Bass 2", "part": "bass", "since": "2026-10-24", "note": "tuned decoding"},
   "0de74aaa": {"name": "Bass 3", "part": "bass", "since": "2026-10-25", "note": "v2 training set"},
   "33b5d457": {"name": "Bass 4", "part": "bass", "since": "2026-10-25", "note": "up / same / down fret outputs"},
+  "7b21c661": {"name": "Bass 5", "part": "bass", "since": "2026-11-17", "note": "hears the BS-RoFormer bass stem, holds tuned through the app's decoding"},
   "50f2e634": {"name": "Drums 1", "part": "drums", "since": "2026-10-24", "note": "first learned drum model"},
   "326e55be": {"name": "Drums 2", "part": "drums", "since": "2026-10-25", "note": "v2 training set"},
   "33fd7dd2": {"name": "Beats 1", "part": "mix", "since": "2026-10-24", "note": "beat and downbeat tracker"}

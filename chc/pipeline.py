@@ -77,6 +77,18 @@ def guitar_stem_source() -> str:
     return src if src in ("s6", "sw") else ""
 
 
+def sw_wanted() -> bool:
+    """Whether any model the app charts with needs the BS-RoFormer SW separator (and it is there)."""
+    if not (SW_PYTHON.exists() and SW_MODEL.exists()):
+        return False
+    return any(ml.available(k) and ml.stem_source(k) == "sw" for k in ("guitar", "bass"))
+
+
+def extra_stems() -> bool:
+    """Whether model_stems will run a separator on top of htdemucs_ft (for progress bars)."""
+    return bool(guitar_stem_source()) or sw_wanted()
+
+
 def stem_label(guitar_wav: Path, other_wav: Path) -> str:
     """What guitar_stem gave the guitar model, for the song's version record (chc.version)."""
     if Path(guitar_wav) == Path(other_wav):
@@ -84,24 +96,30 @@ def stem_label(guitar_wav: Path, other_wav: Path) -> str:
     return "s6" if Path(guitar_wav).parent.name == "six" else "sw"
 
 
-def guitar_stem(wav: Path, work: Path, other_wav: Path, on_progress, stop: threading.Event) -> Path:
-    """The stem the guitar model was trained on. Falls back to Demucs' "other" if the SW separator
-    fails (the SW-trained model still charts better from that than the older model did)."""
+def model_stems(wav: Path, work: Path, other_wav: Path, bass_wav: Path, on_progress,
+                stop: threading.Event) -> tuple[Path, Path]:
+    """The stems the guitar and bass models were trained on, from the whole song `wav`, given
+    Demucs' "other" and bass stems. Falls back to Demucs' if the SW separator fails (the SW-trained
+    models still chart well from those)."""
     src = guitar_stem_source()
-    if not src:
-        return other_wav
+    bass_sw = ml.available("bass") and ml.stem_source("bass") == "sw" and SW_PYTHON.exists() and SW_MODEL.exists()
+    guitar, bass = other_wav, bass_wav
     if src == "s6":
         # htdemucs_6s splits guitar from keys/synths
-        _separate(wav, work / "six", "htdemucs_6s", on_progress, stop)
-        return work / "six" / "guitar.wav"
-    try:
-        _separate(wav, work / "sw", "sw", on_progress, stop)
-        return work / "sw" / "guitar.wav"
-    except Cancelled:
-        raise
-    except Exception as e:
-        print(f"SW guitar stem failed, using Demucs' other: {e}", file=sys.stderr)
-        return other_wav
+        _separate(wav, work / "six", "htdemucs_6s", on_progress if not bass_sw else lambda f: on_progress(0.5 * f), stop)
+        guitar = work / "six" / "guitar.wav"
+    if src == "sw" or bass_sw:
+        try:
+            _separate(wav, work / "sw", "sw", on_progress if src != "s6" else lambda f: on_progress(0.5 + 0.5 * f), stop)
+            if src == "sw":
+                guitar = work / "sw" / "guitar.wav"
+            if bass_sw:
+                bass = work / "sw" / "bass.wav"
+        except Cancelled:
+            raise
+        except Exception as e:
+            print(f"SW stems failed, using Demucs' other and bass: {e}", file=sys.stderr)
+    return guitar, bass
 
 
 def chart_stems(guitar_wav: Path, bass_wav: Path, drums_wav: Path, mix_wav: Path,
@@ -231,14 +249,16 @@ def update_song(song_dir: Path, on_step=lambda i: None, on_progress=lambda frac:
         check()
         on_step(1)
         on_progress(0.08)
-        guitar_wav = guitar_stem(work / "mix.wav", work, wavs["guitar"], lambda f: on_progress(0.08 + 0.3 * f), stop)
+        guitar_wav, bass_wav = model_stems(work / "mix.wav", work, wavs["guitar"], wavs["bass"],
+                                           lambda f: on_progress(0.08 + 0.3 * f), stop)
         check()
         on_step(2)
         on_progress(0.4)
-        c = chart_stems(guitar_wav, wavs["bass"], wavs["drums"], work / "mix.wav",
+        c = chart_stems(guitar_wav, bass_wav, wavs["drums"], work / "mix.wav",
                         lambda f: on_progress(0.4 + 0.55 * f), check, lambda: on_step(3),
                         wavs["vocals"], ini.get("artist", ""), ini.get("name", ""))
         c["stems"] = stem_label(guitar_wav, wavs["guitar"])
+        c["bass_stems"] = "ft" if bass_wav == wavs["bass"] else "sw"
         check()
         audio.ensure_writable(song_dir / name for name in library.OUR_STEMS)
         saved = library.backup(song_dir, "before chart update", files=["notes.mid", "song.ini", *library.OUR_STEMS])
@@ -315,18 +335,20 @@ def make_song(src: Path, artist: str, title: str, songs_dir: Path, charter: str 
         check()
 
         on_step(1)
-        extra = guitar_stem_source()
+        extra = extra_stems()
         span = 0.5 if extra else 0.65
         _separate(wav, preview_dir, model, lambda f: on_progress(0.05 + span * f), stop)
         check()
-        guitar_wav = guitar_stem(wav, work, preview_dir / "other.wav", lambda f: on_progress(0.55 + 0.15 * f), stop)
+        guitar_wav, bass_wav = model_stems(wav, work, preview_dir / "other.wav", preview_dir / "bass.wav",
+                                           lambda f: on_progress(0.55 + 0.15 * f), stop)
         check()
 
         on_step(2); on_progress(0.72)
-        c = chart_stems(guitar_wav, preview_dir / "bass.wav", preview_dir / "drums.wav", wav,
+        c = chart_stems(guitar_wav, bass_wav, preview_dir / "drums.wav", wav,
                         lambda f: on_progress(0.72 + 0.21 * f), check, lambda: on_step(3),
                         preview_dir / "vocals.wav", artist, title)
         c["stems"] = stem_label(guitar_wav, preview_dir / "other.wav")
+        c["bass_stems"] = "ft" if bass_wav == preview_dir / "bass.wav" else "sw"
         check()
 
         on_step(4); on_progress(0.93)

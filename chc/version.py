@@ -3,6 +3,7 @@
 song.ini fields, written by pipeline.write_chart:
   chc_models   guitar:<fingerprint> bass:<...> drums:<...> beats:<...>  (ml.model_tag of each model file)
   chc_stems    what the guitar model listened to: sw (BS-RoFormer SW), s6 (htdemucs_6s), ft (Demucs' other)
+  chc_bass_stems  the same for the bass model: sw or ft (Demucs' bass)
   chc_engine   ENGINE when it was charted: the charting code's version, raised whenever a change to it
                changes what charts come out (not for model changes: chc_models has those)
   chc_vocals   the vocal model, when the song has a vocal chart
@@ -22,10 +23,11 @@ import hashlib
 import json
 from pathlib import Path
 
-ENGINE = 2
+ENGINE = 3
 ENGINES = {
     1: "before version records",
     2: "tidier tempo map: bar 1 kept in place, one tempo for songs played to a click, no lead-in blip",
+    3: "held notes tuned for each model: about twice as many of the real chart's holds",
 }
 PARTS = ("guitar", "bass", "drums")
 MODELS = Path(__file__).resolve().parent.parent / "models"
@@ -44,6 +46,8 @@ def fields(c: dict) -> dict:
            "chc_charted": datetime.date.today().isoformat()}
     if c.get("guitar") and c.get("stems"):
         out["chc_stems"] = c["stems"]
+    if c.get("bass") and c.get("bass_stems"):
+        out["chc_bass_stems"] = c["bass_stems"]
     if c.get("vocals"):
         out["chc_vocals"] = VOCALS
     named = [registered(t)["name"] if registered(t) else f"{k} {t}" for k, t in
@@ -68,6 +72,7 @@ def record(ini: dict) -> dict:
     except ValueError:
         engine = 1
     return {"models": models, "engine": engine, "stems": ini.get("chc_stems", ""),
+            "bass_stems": ini.get("chc_bass_stems", ""),
             "vocals": ini.get("chc_vocals", ""), "charted": ini.get("chc_charted", "")}
 
 
@@ -122,7 +127,8 @@ def describe(ini: dict) -> dict:
     """For the app: what charted the song, in words, and what is behind."""
     rec = record(ini)
     return {"models": {k: name_of(t) for k, t in rec["models"].items()}, "engine": rec["engine"],
-            "engine_note": ENGINES.get(rec["engine"], ""), "stems": rec["stems"], "vocals": rec["vocals"],
+            "engine_note": ENGINES.get(rec["engine"], ""), "stems": rec["stems"], "bass_stems": rec["bass_stems"],
+            "vocals": rec["vocals"],
             "charted": rec["charted"], "outdated": outdated(ini), "upgrades": upgrades(ini)}
 
 

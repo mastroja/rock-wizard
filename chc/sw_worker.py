@@ -1,9 +1,9 @@
-"""Guitar stem worker for guitar models trained on BS-RoFormer SW stems (train.separate_sw).
+"""Stem worker for guitar and bass models trained on BS-RoFormer SW stems (train.separate_sw).
 
     .tmp/sepenv/Scripts/python -m chc.sw_worker <input.wav> <out_dir>
 
 Runs in the separator's own Python environment (see train.separate_sw for how it is set up and
-why its library versions are pinned). Writes guitar.wav to out_dir and prints "PROGRESS <0..1>"
+why its library versions are pinned). Writes guitar.wav and bass.wav to out_dir and prints "PROGRESS <0..1>"
 lines on stdout, like chc.worker. The six stems must add back up to the song, or it fails: a
 broken environment gives near-silent stems without any error.
 """
@@ -65,8 +65,9 @@ def main():
     if left_out > MAX_LEFT_OUT:
         raise SystemExit(f"the stems don't add up to the song (they leave out {left_out:.0%} of it): "
                          "check the separator environment's library versions")
-    pcm = (np.clip(got["guitar"], -1, 1) * 32767).astype("<i2")
-    sf.write(out / "guitar.wav", pcm, wsr, subtype="PCM_16")
+    for name in ("guitar", "bass"):
+        pcm = (np.clip(got[name], -1, 1) * 32767).astype("<i2")
+        sf.write(out / f"{name}.wav", pcm, wsr, subtype="PCM_16")
     for f in work.iterdir():
         f.unlink()
     work.rmdir()

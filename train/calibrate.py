@@ -11,7 +11,7 @@ import torch
 
 from chc import features, ml
 from chc import nn as cnn
-from . import data, metrics
+from . import data, metrics, tune_holds
 
 
 def chord_mix(notes):
@@ -100,8 +100,8 @@ def main():
         print(f"direction weight {w}: melody shape {sc['shape']:.1%} exact-frets F1 {sc['exact_F1']:.3f} "
               f"fret accuracy {sc['lane_acc']:.3f}")
     if model.n_out >= nl + 2:
-        # hammer-on / sustain thresholds judged on the real notes' positions
-        for ch, key, true_of in ((nl, "hopo", lambda n: bool(n[3])), (nl + 1, "sus", lambda n: n[2] > 0)):
+        # hammer-on threshold judged on the real notes' positions; holds below
+        for ch, key, true_of in ((nl, "hopo", lambda n: bool(n[3])),):
             scores = []
             for th in (0.3, 0.4, 0.5, 0.6, 0.7):
                 tp = fp = fn = 0
@@ -117,6 +117,12 @@ def main():
             f, th = max(scores)
             decode[key] = th
             print(f"{key}: threshold {th} F1 {f:.3f}")
+        # the hold rule, judged through the app's own decoding (train.tune_holds: the earlier
+        # threshold-only pick left Guitar 7 holding 38% of real holds where a rule gets 68%)
+        base = decode | ({"max_chord": ml.PLAY_MAX_CHORD[inst]} if inst in ml.PLAY_MAX_CHORD else {})
+        rule, sc, _ = tune_holds.choose(inst, base, [(p, s["notes"][inst]) for p, (_, s) in zip(probs, rows)])
+        decode |= rule
+        print(tune_holds.show(f"holds {rule}", sc))
     ck["decode"] = decode
     torch.save(ck, path)
     print("saved", decode, "->", path)

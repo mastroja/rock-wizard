@@ -154,7 +154,12 @@ PLAY_MAX_CHORD = {"bass": 1}
 # hold-or-not right 92.0% vs 90.9% and catches 54% of real holds vs 36%, for 23% vs 15% of ours
 # not being in the human chart; the earlier guitar 1cb37c91 wanted gap_hold (0.5, 0.2)).
 # Switched on by the owner the same day.
-PLAY_HOLDS: dict = {"35fecfd4": {"sus": 0.2, "min_hold": 0.3, "gap_hold": (0.75, 0.2)}}
+# 2026-11-17, train.tune_holds (the same search over 90 rules, picked on val, checked on test):
+# Guitar 7 7cef1138 hold F1 .528 -> .728 on test, catching 68% of real holds vs 38%; Bass 4
+# 33b5d457 .676 -> .689. Models calibrated since then carry their rule in the file instead.
+PLAY_HOLDS: dict = {"35fecfd4": {"sus": 0.2, "min_hold": 0.3, "gap_hold": (0.75, 0.2)},
+                    "7cef1138": {"sus": 0.3, "min_hold": 0.2, "gap_hold": (0.5, 0.2)},
+                    "33b5d457": {"sus": 0.2, "min_hold": 0.4, "gap_hold": (0.5, 0.2)}}
 
 
 def play_settings(kind: str, model: str | None = None) -> dict:
