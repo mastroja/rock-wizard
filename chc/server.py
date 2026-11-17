@@ -1491,29 +1491,225 @@ def songs_find(q: str = "", limit: int = 30):
 
 
 # ---------- bands ----------
-def _band_out(b: dict) -> dict:
-    """A band with each set-list song found again in the libraries (by key: it may have moved)."""
+def _song_lookup() -> dict:
+    """Song key -> its row in the libraries (Quickplay's copy when both have it)."""
     index = {}
     for r in song_index():
         if r["key"] not in index or r["where"] == "quickplay":
             index[r["key"]] = r
+    return index
+
+
+def _found(songs: list, index: dict) -> list:
+    """Set-list songs found again in the libraries (by key: a song may have moved)."""
+    rows = []
+    for s in songs:
+        r = index.get(s["key"])
+        if r:
+            rows.append(s | {k: r[k] for k in ("folder", "where", "tiers", "has_cover", "cover_v", "length")} | {"here": True})
+        else:
+            rows.append(s | {"here": False, "tiers": {}, "has_cover": False, "length": 0})
+    return rows
+
+
+def _gig_results(g: dict) -> dict:
+    """band id -> votes, and the winners (most votes; a tie shares the win) of a gig."""
+    tally = {}
+    for band in g.get("votes", {}).values():
+        tally[band] = tally.get(band, 0) + 1
+    top = max(tally.values(), default=0)
+    return {"tally": tally, "winners": [b for b, n in tally.items() if n == top and top]}
+
+
+def band_record(bid: str) -> dict:
+    """Gigs a band played, battles won (a gig with two bands or more that got votes), and its gig history."""
+    history, wins, battles = [], 0, 0
+    for g in social.gigs():
+        if not any(x["band"] == bid for x in g["lineup"]) or g["state"] == "planned":
+            continue
+        res = _gig_results(g)
+        battle = len(g["lineup"]) > 1 and bool(res["tally"])
+        won = battle and bid in res["winners"]
+        battles += battle
+        wins += won
+        history.append({"id": g["id"], "name": g["name"], "state": g["state"], "t": g.get("started") or g["t"],
+                        "votes": res["tally"].get(bid, 0), "won": won and g["state"] == "done", "bands": len(g["lineup"])})
+    return {"gigs": len(history), "battles": battles, "wins": wins, "history": history}
+
+
+def _band_out(b: dict) -> dict:
+    """A band with each set-list song found again in the libraries, and its gig record."""
+    index = _song_lookup()
     for sl in b["setlists"]:
-        rows = []
-        for s in sl["songs"]:
-            r = index.get(s["key"])
-            if r:
-                rows.append(s | {k: r[k] for k in ("folder", "where", "tiers", "has_cover", "cover_v", "length")} | {"here": True})
-            else:
-                rows.append(s | {"here": False, "tiers": {}, "has_cover": False, "length": 0})
-        sl["songs"] = rows
-        sl["length"] = sum(r["length"] for r in rows)
-    return b
+        sl["songs"] = _found(sl["songs"], index)
+        sl["length"] = sum(r["length"] for r in sl["songs"])
+    return b | {"record": band_record(b["id"])}
 
 
 @app.get("/api/bands")
 def bands_list():
-    return [b | {"setlists": [{"id": s["id"], "name": s["name"], "n": len(s["songs"])} for s in b["setlists"]]}
+    return [b | {"setlists": [{"id": s["id"], "name": s["name"], "n": len(s["songs"])} for s in b["setlists"]],
+                 "record": {k: v for k, v in band_record(b["id"]).items() if k != "history"}}
             for b in social.bands()]
+
+
+SET_MOODS = {"warmup": "Warm-up", "chill": "Chill", "shred": "Shred", "favourites": "Favourites", "random": "Random"}
+
+
+@app.post("/api/bands/{bid}/autoset")
+async def band_autoset(bid: str, req: Request):
+    """Make a set list: {minutes, mood} (warmup: easy to hard; chill: the easiest; shred: the hardest,
+    building up; favourites: the members' hearts first; random). Difficulty is for the parts the
+    members play (or guitar, bass and drums when nobody has said)."""
+    import random
+    b = await req.json()
+    try:
+        band = social.band(bid)
+    except KeyError as e:
+        raise HTTPException(404, str(e.args[0]))
+    if not (social.is_member(band, who(req)) or is_owner(req)):
+        raise HTTPException(403, "Only the band's members can change it")
+    mood = str(b.get("mood", "warmup"))
+    if mood not in SET_MOODS:
+        raise HTTPException(400, "unknown mood")
+    minutes = max(5, min(180, int(b.get("minutes") or 20)))
+    insts = [r["inst"] for r in (band.get("roles") or {}).values() if r.get("inst")] or ["guitar", "bass", "drums"]
+
+    def score(r):
+        vals = [int(r["tiers"][i]) for i in insts if str(r["tiers"].get(i, "")).lstrip("-").isdigit() and int(r["tiers"][i]) >= 0]
+        return sum(vals) / len(vals) + 1.5 * (len(insts) - len(vals)) if vals else None
+    pool = [r for r in _song_lookup().values() if score(r) is not None]
+    if not pool:
+        raise HTTPException(400, "No songs with difficulties to build a set from")
+    pool.sort(key=score)
+    third = max(1, len(pool) * 35 // 100)
+    hearts = {k for m in band["members"] for k in social.hearts_of(m)}
+    random.shuffle(chosen := list({"chill": pool[:third], "shred": pool[-third:]}.get(mood, pool)))
+    if mood == "favourites":
+        chosen.sort(key=lambda r: r["key"] not in hearts)
+    picked, total = [], 0
+    for r in chosen:
+        if total >= minutes * 60:
+            break
+        picked.append(r)
+        total += r["length"] or 240
+    if mood in ("warmup", "shred"):
+        picked.sort(key=score)
+    name = " ".join(str(b.get("name") or "").split())[:40] or f"{SET_MOODS[mood]} set ({minutes} min)"
+    songs = [{"key": r["key"], "folder": r["folder"], "title": r["title"] or r["name"], "artist": r["artist"]} for r in picked]
+    social.band_edit(bid, "setlist_new", name=name, songs=songs)
+    out = _band_out(social.band(bid))
+    return out | {"new": out["setlists"][-1]["id"]}
+
+
+# ---------- gigs ----------
+def _gig_out(g: dict, request: Request) -> dict:
+    """A gig with its bands (names, logos), each band's songs (its chosen set list until the show
+    starts, then the copy made at the start) found again in the libraries, and the votes."""
+    bands, index = {b["id"]: b for b in social.bands()}, _song_lookup()
+    me_key = social.key_of(who(request))
+    for x in g["lineup"]:
+        b = bands.get(x["band"])
+        x["name"] = b["name"] if b else "A band that broke up"
+        x["here"] = bool(b)
+        x["logo"], x["image"] = (b.get("logo"), b.get("image", 0)) if b else (None, 0)
+        x["members"] = b["members"] if b else []
+        x["mine"] = bool(b) and social.is_member(b, who(request))
+        sls = b["setlists"] if b else []
+        x["setlists"] = [{"id": s["id"], "name": s["name"], "n": len(s["songs"])} for s in sls]
+        sl = next((s for s in sls if s["id"] == x["setlist"]), sls[0] if sls else None)
+        x["setlist_name"] = sl["name"] if sl else ""
+        x["songs"] = _found(x["songs"] if g["state"] != "planned" else (sl["songs"] if sl else []), index)
+        x["length"] = sum(r["length"] or 0 for r in x["songs"])
+    res = _gig_results(g)
+    return g | {"tally": res["tally"], "winners": res["winners"], "my_vote": g.get("votes", {}).get(me_key, ""),
+                "votes": len(g.get("votes", {})), "can_run": is_owner(request) or social.key_of(g["by"]) == me_key}
+
+
+@app.get("/api/gigs")
+def gigs_list(request: Request):
+    return [_gig_out(g, request) for g in social.gigs()]
+
+
+@app.post("/api/gigs")
+async def gig_create(req: Request):
+    try:
+        g = social.gig_create((await req.json()).get("name", ""), who(req))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    social.log("gig", who(req), f"is putting on a gig: {g['name']}", gig=g["id"])
+    return _gig_out(g, req)
+
+
+@app.get("/api/gigs/{gid}")
+def gig_get(gid: str, request: Request):
+    try:
+        return _gig_out(social.gig(gid), request)
+    except KeyError as e:
+        raise HTTPException(404, str(e.args[0]))
+
+
+GIG_RUN_OPS = ("rename", "delete", "move_band", "start", "end", "reopen")  # who put it on, or the host
+
+
+@app.post("/api/gigs/{gid}")
+async def gig_change(gid: str, req: Request):
+    """{op, ...}: rename/delete/move_band/start/end/reopen (who put the gig on, or the host);
+    add_band (anyone); remove_band/set_setlist (the band's members too); goto/tick (anyone, to run
+    the show); vote (anyone, not for their own band)."""
+    b = await req.json()
+    op, name = str(b.get("op", "")), who(req)
+    try:
+        g = social.gig(gid)
+    except KeyError as e:
+        raise HTTPException(404, str(e.args[0]))
+    runs = is_owner(req) or social.key_of(g["by"]) == social.key_of(name)
+    args = {k: b[k] for k in ("name", "band", "setlist", "index", "step", "slot", "song", "played") if k in b}
+    bands = {x["id"]: x for x in social.bands()}
+    if op in GIG_RUN_OPS and not runs:
+        raise HTTPException(403, f"Only {g['by']} (who put the gig on) or the host can do that")
+    if op in ("remove_band", "set_setlist") and not runs:
+        x = g["lineup"][int(b.get("index", -1))] if 0 <= int(b.get("index", -1)) < len(g["lineup"]) else None
+        if not x or not (x["band"] in bands and social.is_member(bands[x["band"]], name)):
+            raise HTTPException(403, "Only the band's members, or who put the gig on, can do that")
+    if op == "add_band":
+        band = bands.get(str(b.get("band", "")))
+        if not band:
+            raise HTTPException(400, "Pick a band")
+        sls = band["setlists"]  # the first set list with songs on it, unless one is picked
+        first = next((x for x in sls if x["songs"]), sls[0] if sls else None)
+        args["setlist"] = str(b.get("setlist") or (first["id"] if first else ""))
+    if op == "vote":
+        args["name"] = name
+        band = bands.get(str(b.get("band", "")))
+        if band and social.is_member(band, name):
+            raise HTTPException(400, "No voting for your own band!")
+    if op == "start":  # each band's set list is copied in, so changing it later doesn't change the show
+        songs = []
+        for x in g["lineup"]:
+            band = bands.get(x["band"])
+            sls = band["setlists"] if band else []
+            sl = next((s for s in sls if s["id"] == x["setlist"]), sls[0] if sls else None)
+            songs.append(sl["songs"] if sl else [])
+        args["songs"] = songs
+    before = g["slot"]
+    try:
+        social.gig_edit(gid, op, **args)
+    except (KeyError, ValueError) as e:
+        raise HTTPException(400, str(e.args[0]) if e.args else "That didn't work")
+    if op == "delete":
+        return {"deleted": True}
+    g2 = social.gig(gid)
+    on = lambda i: (bands.get(g2["lineup"][i]["band"]) or {}).get("name", "A band")  # noqa: E731
+    if op == "start":
+        social.log("gig", name, f"started {g2['name']}! First up: {on(0)}", gig=gid)
+    elif op == "goto" and g2["slot"] != before and g2["state"] == "live":
+        social.log("gig", name, f"brought {on(g2['slot'])} on stage at {g2['name']}", gig=gid)
+    elif op == "end":
+        res = _gig_results(g2)
+        best = " & ".join((bands.get(w) or {}).get("name", "?") for w in res["winners"])
+        social.log("gig", name, f"ended {g2['name']}" + (f". Best band: {best}" if best else ""), gig=gid)
+    return _gig_out(g2, req)
 
 
 @app.post("/api/bands")
@@ -1549,7 +1745,18 @@ async def band_change(bid: str, req: Request):
         raise HTTPException(404, str(e.args[0]))
     member = social.is_member(band, name)
     lead = is_owner(req) or social.key_of(band["by"]) == social.key_of(name)
-    args = {k: b[k] for k in ("name", "setlist", "index", "step", "logo") if k in b}
+    if op == "like":  # anyone but the band itself
+        if member:
+            raise HTTPException(400, "You can't like your own band")
+        social.band_edit(bid, "like", name=name)
+        if social.is_member({"members": social.band(bid).get("fans", [])}, name):
+            social.log("band", name, f"likes {band['name']}", band=bid)
+        return _band_out(social.band(bid))
+    args = {k: b[k] for k in ("name", "setlist", "index", "step", "logo", "inst", "level", "bio", "genre") if k in b}
+    if op == "role":  # each member sets their own
+        if not member:
+            raise HTTPException(403, "Only the band's members pick what they play")
+        args["name"] = name
     if op == "image":
         raise HTTPException(400, "unknown change")
     if op == "image_remove":  # back to the built logo

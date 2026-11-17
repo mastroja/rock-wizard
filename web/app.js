@@ -292,7 +292,7 @@ const owner = () => S.me.owner;
 const byChip = (s) => s.added_by ? `<span class="chip by link"${tint(s.added_by)} data-user="${esc(s.added_by)}">from ${esc(s.added_by)}</span>` : "";
 const view = () => (location.hash.slice(1).split("?")[0] || "create");
 const hashArg = (k) => new URLSearchParams(location.hash.split("?")[1] || "").get(k) || "";
-const navView = () => (["profile", "band"].includes(view()) ? "party" : view());  // a profile or band lives under Party
+const navView = () => (["profile", "band", "gig"].includes(view()) ? "party" : view());  // a profile or band lives under Party
 
 function navHTML(cls) {
   const active = S.jobs.filter((j) => j.status === "queued" || j.status === "running").length;
@@ -371,7 +371,7 @@ function page(title, sub, body, actions = "") {
   lastPage = title;
   $("#main").innerHTML = `<div class="top"><div><h1>${title}</h1>${sub ? `<p class="sub">${sub}</p>` : ""}</div><div class="row">${actions}</div></div>${body}`;
 }
-const render = () => ((!owner() && view() === "library" ? renderCreate : { create: renderCreate, queue: renderQueue, staging: renderStaging, live: renderLive, party: renderParty, library: renderLibrary, settings: renderSettings, profile: renderProfile, band: renderBand }[view()]) || renderCreate)();
+const render = () => ((!owner() && view() === "library" ? renderCreate : { create: renderCreate, queue: renderQueue, staging: renderStaging, live: renderLive, party: renderParty, library: renderLibrary, settings: renderSettings, profile: renderProfile, band: renderBand, gig: renderGig }[view()]) || renderCreate)();
 
 // ---------- create ----------
 function namesFromFile(stem) {  // quick guess; the PC looks names up properly while converting
@@ -1336,8 +1336,10 @@ const HEART = `<svg class="i-heart" viewBox="0 0 24 24"><path d="M12 20.5s-7.5-4
 
 async function loadPeople() {
   try {
-    S.peopleList = await api("/api/people");
+    const [list, bands] = await Promise.all([api("/api/people"), api("/api/bands").catch(() => [])]);
+    S.peopleList = list;
     S.people = Object.fromEntries(S.peopleList.map((p) => [pkey(p.name), p]));
+    S.bandsById = Object.fromEntries(bands.map((b) => [b.id, b]));
   } catch (e) { /* the page works without colours */ }
 }
 async function loadHearts() {
@@ -1384,7 +1386,7 @@ async function socialTick(st) {
         if (first) return;
         const typing = document.activeElement && document.activeElement.matches("input, textarea, select");
         if (view() === "party") renderParty(true);
-        else if (["profile", "band"].includes(view()) && !typing && !$(".modal")) render();
+        else if (["profile", "band", "gig"].includes(view()) && !typing && !$(".modal")) render();
       });
     }
     if (S.actId < 0) { S.actId = st.activity; return; }  // the first look: nothing is news yet
@@ -1400,24 +1402,24 @@ async function socialTick(st) {
 // ---------- party: feed, tonight's setlist, people, invite ----------
 let partyTab = "feed";
 const KIND = { added: ["", "Added"], ready: ["green", "Ready"], failed: ["red", "Failed"], published: ["accent", "Live"],
-  downloaded: ["", "Download"], shame: ["yellow", "Shame"], setlist: ["accent", "Setlist"], band: ["accent", "Band"] };
+  downloaded: ["", "Download"], shame: ["yellow", "Shame"], setlist: ["accent", "Setlist"], band: ["accent", "Band"], gig: ["red", "Gig"] };
 
 async function renderParty(keep = false) {
   if (!keep || !$("#pbody")) {
-    page("Party", "What everyone's adding, tonight's setlist, bands and who's who.",
-      `<div class="tabs" style="margin-bottom:14px">${[["feed", "Feed"], ["setlist", "Setlist"], ["bands", "Bands"], ["people", "People"], ["invite", "Invite"]].map(([k, l]) =>
+    page("Party", "What everyone's adding, tonight's setlist, bands, gigs and who's who.",
+      `<div class="tabs" style="margin-bottom:14px">${[["feed", "Feed"], ["setlist", "Setlist"], ["bands", "Bands"], ["gigs", "Gigs"], ["people", "People"], ["invite", "Invite"]].map(([k, l]) =>
         `<button class="${partyTab === k ? "on" : ""}" data-ptab="${k}">${l}</button>`).join("")}</div>
       <div id="pbody"><div class="empty"><span class="spinner"></span></div></div>`);
     $$("[data-ptab]").forEach((b) => b.onclick = () => { partyTab = b.dataset.ptab; renderParty(); });
   }
   const tab = partyTab;
   let html;
-  try { html = await { feed: feedHTML, setlist: setlistHTML, bands: bandsHTML, people: peopleHTML, invite: inviteHTML }[tab](); }
+  try { html = await { feed: feedHTML, setlist: setlistHTML, bands: bandsHTML, gigs: gigsHTML, people: peopleHTML, invite: inviteHTML }[tab](); }
   catch (e) { html = `<p class="chip red">${esc(e.message)}</p>`; }
   const body = $("#pbody");
   if (!body || view() !== "party" || tab !== partyTab) return;
   body.innerHTML = html;
-  ({ feed: wireFeed, setlist: wireSetlist, bands: wireBands, people: wirePeople, invite: wireInvite })[tab](body);
+  ({ feed: wireFeed, setlist: wireSetlist, bands: wireBands, gigs: wireGigs, people: wirePeople, invite: wireInvite })[tab](body);
 }
 
 async function feedHTML() {
@@ -1502,6 +1504,12 @@ const starPts = (cx, cy, r, n = 5, inner = 0.45) => Array.from({ length: n * 2 }
 }).join(" ");
 const heartAt = (cx, cy, s, fill) => `<path d="M${cx} ${cy + s}l${-s * 1.1} ${-s * 1.1}a${s * .62} ${s * .62} 0 0 1 ${s * 1.1} ${-s * .9}a${s * .62} ${s * .62} 0 0 1 ${s * 1.1} ${s * .9}z" fill="${fill}"/>`;
 
+function merchArt(id) {  // a band's logo on a band tee
+  const b = (S.bandsById || {})[id];
+  if (!b) return "";
+  return b.image ? `<image href="/api/bands/${encodeURIComponent(b.id)}/image?v=${b.image}" x="21.5" y="51.5" width="21" height="21" preserveAspectRatio="xMidYMid meet"/>`
+    : logoSVG(b).replace('<svg viewBox="0 0 160 160"', '<svg x="21" y="51" width="22" height="22" viewBox="0 0 160 160"');
+}
 function avatarSVG(a) {
   const sk = a.skin, hc = a.hair_color, tc = a.top_color || "#1f2937", fh = a.hair === "none" ? "#3a2a20" : hc;
   const line = (w = 2) => `fill="none" stroke="${INK}" stroke-width="${w}" stroke-linecap="round"`;
@@ -1522,7 +1530,8 @@ function avatarSVG(a) {
     jacket: `${body} fill="${tc}"/>${neckline}<path d="M6 66c2-11 13-16 22-16l2 16z" fill="#18181b"/><path d="M58 66c-2-11-13-16-22-16l-2 16z" fill="#18181b"/>`,
     tank: `${body} fill="${shade(sk, .06)}"/><path d="M21 66c0-7 2-12 4-15h14c2 3 4 8 4 15z" fill="${tc}"/><path d="M27 51q5 4 10 0z" fill="${sk}"/>`,
     bandtee: `${body} fill="${tc}"/>${neckline}<path d="M34 54l-5 6h3.5l-2 5.5 6-7.5h-3.5l2.5-4z" fill="#fde047"/>`,
-    collar: `${body} fill="${tc}"/>${neckline}<path d="M25 50l7 5-3 3zM39 50l-7 5 3 3z" fill="#fff"/>` }[a.top || "tee"] || "";
+    collar: `${body} fill="${tc}"/>${neckline}<path d="M25 50l7 5-3 3zM39 50l-7 5 3 3z" fill="#fff"/>`,
+    merch: `${body} fill="${tc}"/>${neckline}${merchArt(a.band)}` }[a.top || "tee"] || "";
   const face = { round: `<circle cx="32" cy="33" r="16" fill="${sk}"/>`, square: `<rect x="16" y="17" width="32" height="32" rx="9" fill="${sk}"/>`,
     long: `<ellipse cx="32" cy="34" rx="14" ry="18" fill="${sk}"/>`, oval: `<ellipse cx="32" cy="33" rx="15" ry="17" fill="${sk}"/>`,
     wide: `<ellipse cx="32" cy="34" rx="18.5" ry="15" fill="${sk}"/>` }[a.face] || "";
@@ -1589,9 +1598,10 @@ const pickOne = (xs) => xs[Math.floor(Math.random() * xs.length)];
 const randomAvatar = () => Object.fromEntries(Object.entries(S.me.avatar_parts || {}).map(([k, opts]) =>
   [k, OPTIONAL_PARTS.includes(k) && Math.random() < .55 ? "none" : pickOne(opts)]));
 const AV_TABS = [["face", "Face", ["face", "skin", "eyes", "brows", "mouth", "facial_hair", "extra"]], ["hair", "Hair & hats", ["hair", "hair_color", "hat"]],
-  ["style", "Style", ["glasses", "top", "top_color", "pattern", "bg"]], ["photo", "Photo", []]];
+  ["style", "Style", ["glasses", "top", "top_color", "band", "pattern", "bg"]], ["photo", "Photo", []]];
 const PART_LABEL = { face: "Face shape", skin: "Skin", hair: "Hair", hair_color: "Hair colour", brows: "Eyebrows", eyes: "Eyes", mouth: "Mouth",
-  facial_hair: "Facial hair", glasses: "Glasses", hat: "Hat", top: "Top", top_color: "Top colour", extra: "Extras", pattern: "Background pattern", bg: "Background colour" };
+  facial_hair: "Facial hair", glasses: "Glasses", hat: "Hat", top: "Top", top_color: "Top colour", extra: "Extras", pattern: "Background pattern", bg: "Background colour",
+  band: "Band tee: whose logo is on your shirt" };
 const SWATCH_PARTS = ["skin", "hair_color", "top_color"];
 const photoURL = (name, v) => `/api/avatar/photo?${qs({ name, v })}`;
 
@@ -1607,7 +1617,11 @@ function editAvatar(after) {
   const opt = (k, v) => SWATCH_PARTS.includes(k)
     ? `<button class="swatch${cur[k] === v ? " on" : ""}" data-part="${k}" data-v="${v}" style="background:${v}" aria-label="${PART_LABEL[k]}"></button>`
     : `<button class="avopt${cur[k] === v ? " on" : ""}" data-part="${k}" data-v="${v}" title="${esc(v)}"><span class="avatar art" style="background:${bg}">${avatarSVG({ ...cur, ...(k === "eyes" || k === "brows" ? { glasses: "none" } : {}), [k]: v })}</span></button>`;
-  const section = (k) => k === "bg"
+  const bandSection = () => { const bands = Object.values(S.bandsById || {});
+    return `<div class="avsec"><div class="faint">${PART_LABEL.band}</div>${bands.length ? `<div class="swatches">${bands.map((b) =>
+      `<button class="logoopt${cur.band === b.id && cur.top === "merch" ? " on" : ""}" data-avband="${esc(b.id)}" title="${esc(b.name)}"><span class="bandlogo">${bandArt(b)}</span></button>`).join("")}</div>`
+      : `<div class="faint">No bands yet.</div>`}</div>`; };
+  const section = (k) => k === "band" ? bandSection() : k === "bg"
     ? `<div class="avsec"><div class="faint">${PART_LABEL.bg}</div><div class="swatches">${(S.me.colors || []).map((c) =>
         `<button class="swatch${c === bg ? " on" : ""}" data-bg="${c}" style="background:${c}" aria-label="Background colour"></button>`).join("")}</div></div>`
     : `<div class="avsec"><div class="faint">${PART_LABEL[k] || k}</div><div class="swatches">${(parts[k] || []).map((v) => opt(k, v)).join("")}</div></div>`;
@@ -1636,6 +1650,7 @@ function editAvatar(after) {
     $$("[data-avtab]", m).forEach((b) => b.onclick = () => { tab = b.dataset.avtab; draw(); });
     $$("[data-bg]", m).forEach((b) => b.onclick = () => { bg = b.dataset.bg; draw(); });
     $$("[data-part]", m).forEach((b) => b.onclick = () => { cur[b.dataset.part] = b.dataset.v; draw(); });
+    $$("[data-avband]", m).forEach((b) => b.onclick = () => { cur.band = b.dataset.avband; cur.top = "merch"; draw(); });
     const save = async (avatar) => {
       try {
         const body = { avatar, photo: null };
@@ -1964,13 +1979,27 @@ async function renderProfile() {
 // ---------- bands ----------
 const bandOp = (id, body) => post("/api/bands/" + encodeURIComponent(id), body);
 const inBand = (b) => b.members.some((m) => pkey(m) === pkey(S.me.who));
+const isFan = (b) => (b.fans || []).some((f) => pkey(f) === pkey(S.me.who));
+const ROCK = `<svg class="rock" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 21c-2-1-3-3-3-6v-4c0-1 1-2 2-2s2 1 2 2V4c0-1 .8-2 2-2s2 1 2 2v6l1-.1V9c0-1 .8-1.8 1.8-1.8S16.6 8 16.6 9v1.4l.4-.4V4c0-1 .8-2 2-2s2 1 2 2v10c0 4-2 6-4 7z"/></svg>`;
+const likeBtn = (b) => `<button class="likebtn${isFan(b) ? " on" : ""}" data-like="${esc(b.id)}" ${inBand(b) ? `disabled title="Your own band"` : `title="Rock on!"`}>${ROCK}<span>${(b.fans || []).length}</span></button>`;
+const PARTS_ICON = { guitar: "Guitar", bass: "Bass", drums: "Drums", vocals: "Vocals" };
+
+function wireLikes(root, after) {
+  $$("[data-like]", root).forEach((x) => x.onclick = async (e) => {
+    e.stopPropagation(); e.preventDefault();
+    try { await bandOp(x.dataset.like, { op: "like" }); after(); } catch (err) { toast(err.message); }
+  });
+}
 
 async function bandsHTML() {
-  const list = await api("/api/bands");
+  const list = (await api("/api/bands")).sort((a, b) => (b.fans || []).length - (a.fans || []).length || a.t - b.t);
+  const top = list.length > 1 && (list[0].fans || []).length && (list[0].fans || []).length > (list[1].fans || []).length ? list[0].id : "";
   return `${list.length ? `<div class="people">${list.map((b) => `<div class="card bandcard link" data-band="${esc(b.id)}"><span class="bandlogo">${bandArt(b)}</span>
-      <div class="grow" style="min-width:0"><div class="row spread" style="gap:8px"><b class="ellipsis">${esc(b.name)}</b>${inBand(b) ? `<span class="chip green">You're in it</span>` : ""}</div>
-      <div class="avstack" style="margin:8px 0">${b.members.map((m) => avatar(m, "", "", false)).join("")}</div>
-      <div class="faint">${plural(b.members.length, "member")} · ${plural(b.setlists.length, "set list")} · ${plural(b.setlists.reduce((t, s) => t + s.n, 0), "song")}</div></div></div>`).join("")}</div>`
+      <div class="grow" style="min-width:0"><b class="bandname">${esc(b.name)}</b>${b.genre ? `<div class="faint ellipsis">${esc(b.genre)}</div>` : ""}
+      <div class="row wrap" style="gap:8px;margin:8px 0"><span class="avstack">${b.members.map((m) => avatar(m, "", "", false)).join("")}</span>
+        ${inBand(b) ? `<span class="chip green">You're in it</span>` : ""}${b.id === top ? `<span class="chip yellow">Crowd favourite</span>` : ""}</div>
+      <div class="faint">${plural(b.members.length, "member")} · ${plural(b.setlists.reduce((t, s) => t + s.n, 0), "song")}${b.record && b.record.wins ? ` · ${plural(b.record.wins, "battle")} won` : ""}</div></div>
+      ${likeBtn(b)}</div>`).join("")}</div>`
     : `<div class="card empty">No bands yet. Start one below, then add your friends.</div>`}
     <div class="card"><h2>Start a band</h2>
       <div class="row" style="gap:8px"><input id="bandname" class="grow" maxlength="40" placeholder="Band name">
@@ -1985,6 +2014,80 @@ function wireBands(body) {
   $("#bandnew", body).onclick = go;
   $("#banddice", body).onclick = () => { $("#bandname", body).value = bandName(); };
   $("#bandname", body).onkeydown = (e) => { if (e.key === "Enter") go(); };
+  wireLikes(body, () => renderParty(true));
+}
+
+// a silly backstory for the bio's dice
+const BIO = {
+  start: ["Formed in a basement after a power cut", "Met at a karaoke night that went too far", "Started as a dare at a sleepover", "Assembled by a mysterious stranger with a van",
+    "Born when four kazoos weren't enough", "Got together to settle a bet about Free Bird", "Escaped from a high school talent show", "Fell out of a time machine in 1987"],
+  sound: ["they play riffs loud enough to wake the neighbours", "their sound is best described as a blender full of thunder", "they only know power chords and they're proud of it",
+    "every song is secretly about pizza", "the drummer has never once played in time and nobody minds", "they have exactly one slow song and it's still fast"],
+  goal: ["Their dream is to headline the living room.", "Next stop: Expert difficulty.", "They will not rest until every note is green.", "Banned from three bowling alleys.",
+    "Their fans call themselves the Strummers.", "Rumour has it the bassist is a raccoon."],
+};
+const GENRES = ["Garage rock", "Pop punk", "Stadium rock", "Nu metal", "Synthwave", "Grunge", "Yacht rock", "Space metal", "Emo", "Surf rock", "Thrash", "Indie", "Funk metal", "Polka punk"];
+const bandBio = () => `${pickOne(BIO.start)}, ${pickOne(BIO.sound)}. ${pickOne(BIO.goal)}`;
+
+function editBio(b, after) {
+  const scrim = document.createElement("div"); scrim.className = "scrim pop";
+  const m = document.createElement("div"); m.className = "modal card pop";
+  m.innerHTML = `<h2 style="margin-top:0">About ${esc(b.name)}</h2>
+    <div class="faint" style="margin-bottom:4px">Genre</div>
+    <div class="row" style="gap:8px"><input id="bgenre" class="grow" maxlength="40" value="${esc(b.genre || "")}" placeholder="e.g. Garage rock" list="genres">
+      <button class="btn" id="bgdice" aria-label="Random genre">${DICE}</button></div>
+    <datalist id="genres">${GENRES.map((g) => `<option value="${g}">`).join("")}</datalist>
+    <div class="faint" style="margin:12px 0 4px">The story so far</div>
+    <textarea id="bbio" maxlength="300" rows="4" style="width:100%" placeholder="How did the band start?">${esc(b.bio || "")}</textarea>
+    <div class="row" style="margin-top:12px;gap:8px"><button class="btn" id="bbdice">${DICE} Make one up</button><span class="grow"></span>
+      <button class="btn" id="bbno">Cancel</button><button class="btn primary" id="bbok">Save</button></div>`;
+  document.body.append(scrim, m);
+  const close = () => { scrim.remove(); m.remove(); };
+  scrim.onclick = close; $("#bbno", m).onclick = close;
+  $("#bgdice", m).onclick = () => { $("#bgenre", m).value = pickOne(GENRES); };
+  $("#bbdice", m).onclick = () => { $("#bbio", m).value = bandBio(); };
+  $("#bbok", m).onclick = async () => {
+    try { await bandOp(b.id, { op: "bio", genre: $("#bgenre", m).value, bio: $("#bbio", m).value }); close(); toast("Saved"); after(); } catch (e) { toast(e.message); }
+  };
+}
+
+// "make me a set": a set list built from the library for the band's parts
+function makeSet(b, after) {
+  const MOODS = [["warmup", "Warm-up", "Easy songs first, building up"], ["chill", "Chill", "Only the easiest songs"], ["shred", "Shred", "Only the hardest, saving the best for last"],
+    ["favourites", "Favourites", "The members' hearted songs first"], ["random", "Random", "Anything goes"]];
+  let mood = "warmup", minutes = 20;
+  const scrim = document.createElement("div"); scrim.className = "scrim pop";
+  const m = document.createElement("div"); m.className = "modal card pop";
+  const draw = () => {
+    m.innerHTML = `<h2 style="margin-top:0">Make me a set</h2>
+      <div class="faint" style="margin-bottom:6px">How long?</div>
+      <div class="tabs">${[10, 20, 30, 45, 60].map((n) => `<button class="${minutes === n ? "on" : ""}" data-min="${n}">${n} min</button>`).join("")}</div>
+      <div class="faint" style="margin:14px 0 6px">What kind of set?</div>
+      ${MOODS.map(([k, l, d]) => `<button class="moodopt${mood === k ? " on" : ""}" data-mood="${k}"><b>${l}</b><span class="faint">${d}</span></button>`).join("")}
+      <p class="faint">Difficulty is for the parts the members play${Object.keys(b.roles || {}).length ? "" : " (guitar, bass and drums until members pick theirs)"}. You can change the set after.</p>
+      <div class="row" style="justify-content:flex-end;gap:8px"><button class="btn" id="msno">Cancel</button><button class="btn primary" id="msok">Make it</button></div>`;
+    $$("[data-min]", m).forEach((x) => x.onclick = () => { minutes = +x.dataset.min; draw(); });
+    $$("[data-mood]", m).forEach((x) => x.onclick = () => { mood = x.dataset.mood; draw(); });
+    $("#msno", m).onclick = close;
+    $("#msok", m).onclick = async () => {
+      try { const r = await post(`/api/bands/${encodeURIComponent(b.id)}/autoset`, { mood, minutes }); close(); toast("Set list made"); after(r.new); } catch (e) { toast(e.message); }
+    };
+  };
+  const close = () => { scrim.remove(); m.remove(); };
+  scrim.onclick = close;
+  draw();
+  document.body.append(scrim, m);
+}
+
+// who plays what: each member's part of a song, red when it's harder than they like (or missing)
+function partsHTML(b, s) {
+  const roles = b.roles || {};
+  const players = b.members.filter((mb) => (roles[pkey(mb)] || {}).inst);
+  if (!players.length) return tiersHTML(s.tiers);
+  return `<div class="tiers parts">${players.map((mb) => {
+    const r = roles[pkey(mb)], v = (s.tiers || {})[r.inst], has = v && v !== "-1", hard = !has || +v > r.level;
+    return `<span class="${hard ? "toohard" : ""}" title="${esc(mb)} on ${r.inst}${!has ? ": no part in this chart" : hard ? `: harder than ${r.level}` : ""}">${avatar(mb, "", "mini", false)}${r.inst} <b>${has ? esc(v) : "–"}</b></span>`;
+  }).join("")}</div>`;
 }
 
 let bandSel = "", bandQ = "";
@@ -1998,30 +2101,47 @@ async function renderBand() {
   if (!b.setlists.some((s) => s.id === bandSel)) bandSel = (b.setlists[0] || {}).id || "";
   const sl = b.setlists.find((s) => s.id === bandSel);
   const others = (S.peopleList || []).filter((p) => !b.members.some((m) => pkey(m) === pkey(p.name)));
-  page(esc(b.name), `Started by <b class="link" data-user="${esc(b.by)}">${esc(b.by)}</b> · ${plural(b.members.length, "member")}`, `
+  const roles = b.roles || {}, rec = b.record || { gigs: 0, wins: 0, history: [] }, fans = b.fans || [];
+  page(esc(b.name), `Started by <b class="link" data-user="${esc(b.by)}">${esc(b.by)}</b>${b.genre ? ` · ${esc(b.genre)}` : ""}`, `
     <div class="card bandhero"><span class="bandlogo big${edit ? " link" : ""}" ${edit ? `id="logoimg" title="Edit the logo"` : ""}>${bandArt(b)}</span>
-      <div class="grow" style="min-width:0"><div class="stats" style="margin-top:0"><span><b>${b.members.length}</b> ${b.members.length === 1 ? "member" : "members"}</span>
-        <span><b>${b.setlists.length}</b> set ${b.setlists.length === 1 ? "list" : "lists"}</span><span><b>${b.setlists.reduce((t, s) => t + s.songs.length, 0)}</b> songs</span></div>
-        ${edit ? `<div class="row wrap" style="gap:8px;margin-top:12px"><button class="btn small" id="logoedit">${b.logo || b.image ? "Edit logo" : "Make a logo"}</button></div>` : ""}</div></div>
-    <div class="card"><h2>Members</h2><div class="members">${b.members.map((m) => `<div class="member">${avatar(m, "", "big")}
-        <div style="min-width:0"><b class="link ellipsis" data-user="${esc(m)}">${esc(m)}</b>${pkey(m) === pkey(b.by) ? `<div class="faint">Started it</div>` : ""}</div>
-        ${lead && pkey(m) !== me ? `<button class="btn small danger" data-kick="${esc(m)}" aria-label="Take ${esc(m)} out of the band">&#10005;</button>` : ""}</div>`).join("")}</div>
+      <div class="grow" style="min-width:0">
+        <div class="stats" style="margin-top:0"><span><b>${fans.length}</b> ${fans.length === 1 ? "fan" : "fans"}</span><span><b>${b.setlists.reduce((t, s) => t + s.songs.length, 0)}</b> songs</span>
+          <span><b>${rec.gigs}</b> ${rec.gigs === 1 ? "gig" : "gigs"}</span><span><b>${rec.wins}</b> ${rec.wins === 1 ? "battle" : "battles"} won</span></div>
+        ${b.bio ? `<p class="bio">${esc(b.bio)}</p>` : ""}
+        <div class="row wrap" style="gap:8px;margin-top:12px">${likeBtn(b)}
+          ${fans.length ? `<span class="avstack" title="Fans: ${esc(fans.join(", "))}">${fans.slice(0, 8).map((f) => avatar(f, "", "", true)).join("")}</span>` : ""}
+          ${edit ? `<button class="btn small" id="logoedit">${b.logo || b.image ? "Edit logo" : "Make a logo"}</button><button class="btn small" id="bioedit">${b.bio || b.genre ? "Edit bio" : "Add a bio"}</button>` : ""}</div></div></div>
+    <div class="card"><h2>Members</h2><div class="members">${b.members.map((m) => {
+      const r = roles[pkey(m)] || {}, mine = pkey(m) === me;
+      return `<div class="member">${avatar(m, "", "big")}
+        <div style="min-width:0"><b class="link ellipsis" data-user="${esc(m)}">${esc(m)}</b>
+          ${mine ? `<div class="row wrap rolepick"><select id="myinst" aria-label="What you play"><option value="">Plays…</option>${Object.entries(PARTS_ICON).map(([k, l]) => `<option value="${k}" ${r.inst === k ? "selected" : ""}>${l}</option>`).join("")}</select>
+              ${r.inst ? `<select id="mylevel" aria-label="Hardest difficulty you like">${[0, 1, 2, 3, 4, 5, 6].map((n) => `<option value="${n}" ${(r.level ?? 6) === n ? "selected" : ""}>up to ${n}</option>`).join("")}</select>` : ""}</div>`
+            : `<div class="faint">${r.inst ? `${PARTS_ICON[r.inst]} · up to ${r.level}` : pkey(m) === pkey(b.by) ? "Started it" : "Hasn't picked a part"}</div>`}</div>
+        ${lead && !mine ? `<button class="btn small danger" data-kick="${esc(m)}" aria-label="Take ${esc(m)} out of the band">&#10005;</button>` : ""}</div>`;
+    }).join("")}</div>
       ${edit && others.length ? `<div class="row wrap" style="gap:8px;margin-top:14px"><select id="addmem">${others.map((p) => `<option value="${esc(p.name)}">${esc(p.name)}</option>`).join("")}</select>
         <button class="btn small" id="addmembtn">Add to the band</button></div>` : ""}</div>
-    <div class="card"><div class="row spread wrap" style="gap:10px"><h2 style="margin:0">Set lists</h2>${edit ? `<button class="btn small" id="slnew">+ New set list</button>` : ""}</div>
+    <div class="card"><div class="row spread wrap" style="gap:10px"><h2 style="margin:0">Set lists</h2>
+        ${edit ? `<div class="row wrap" style="gap:6px"><button class="btn small primary" id="makeset">${DICE} Make me a set</button><button class="btn small" id="slnew">+ New set list</button></div>` : ""}</div>
       ${b.setlists.length ? `<div class="tabs" style="margin-top:12px">${b.setlists.map((s) => `<button class="${s.id === bandSel ? "on" : ""}" data-sl="${esc(s.id)}">${esc(s.name)} <span class="faint">${s.songs.length}</span></button>`).join("")}</div>` : ""}
       ${sl ? `<div class="row spread wrap" style="gap:10px;margin:14px 0 4px"><div><b>${esc(sl.name)}</b> <span class="faint">· ${plural(sl.songs.length, "song")}${sl.length ? ` · ${fmtLen(sl.length)}` : ""}</span></div>
           ${edit ? `<div class="row" style="gap:6px"><button class="btn small" id="slren">Rename</button><button class="btn small danger" id="sldel">Delete</button></div>` : ""}</div>
         ${sl.songs.length ? sl.songs.map((s, i) => `<div class="item setrow songrow${s.here ? " link" : ""}" ${s.here ? `data-song="${esc(s.folder)}" data-where="${s.where}"` : ""}>
             <span class="setno">${i + 1}</span>${coverHTML(s, "setcover", 120)}
             <div class="grow" style="min-width:0"><div class="t ellipsis">${esc(s.title)}</div><div class="faint ellipsis">${esc(s.artist || "Unknown artist")}${s.length ? ` · ${fmtLen(s.length)}` : ""}</div>
-              ${s.here ? tiersHTML(s.tiers) : `<span class="chip red">Not in your library any more</span>`}</div>
+              ${s.here ? partsHTML(b, s) : `<span class="chip red">Not in your library any more</span>`}</div>
             ${edit ? `<div class="row setbtns"><button class="btn small" data-mv="-1" data-i="${i}" aria-label="Move up" ${i ? "" : "disabled"}>&#8593;</button>
               <button class="btn small" data-mv="1" data-i="${i}" aria-label="Move down" ${i < sl.songs.length - 1 ? "" : "disabled"}>&#8595;</button>
               <button class="btn small danger" data-rm="${i}" aria-label="Take off the set list">&#10005;</button></div>` : ""}</div>`).join("")
-          : `<div class="empty">No songs on this set list yet.${edit ? " Search below, or tap <b>+ Band set list</b> on any song." : ""}</div>`}
+          : `<div class="empty">No songs on this set list yet.${edit ? " Search below, tap <b>Make me a set</b>, or tap <b>+ Band set list</b> on any song." : ""}</div>`}
         ${edit ? `<div class="addsong"><input id="songq" type="search" placeholder="Add a song: search staging and Quickplay" value="${esc(bandQ)}" style="width:100%"><div id="songhits"></div></div>` : ""}`
-      : `<div class="empty">No set lists yet.</div>`}</div>`,
+      : `<div class="empty">No set lists yet.</div>`}</div>
+    <div class="card"><div class="row spread wrap" style="gap:10px"><h2 style="margin:0">Gigs</h2><button class="btn small" id="togigs">Book a gig</button></div>
+      ${rec.history.length ? rec.history.map((h) => `<div class="item link" data-gig="${esc(h.id)}"><span class="gigdot ${h.state}"></span>
+          <div class="grow" style="min-width:0"><b class="ellipsis">${esc(h.name)}</b><div class="faint">${h.state === "live" ? "On now" : since(h.t)}${h.bands > 1 ? ` · ${plural(h.votes, "vote")}` : ""}</div></div>
+          ${h.won ? `<span class="chip yellow">Won the battle</span>` : ""}</div>`).join("")
+        : `<div class="faint" style="margin-top:8px">No gigs played yet.</div>`}</div>`,
     `<button class="btn small" data-go="party">&larr; Party</button>${lead ? `<button class="btn small" id="bren">Rename</button><button class="btn small danger" id="bdel">Delete band</button>` : ""}${member ? `<button class="btn small" id="bleave">Leave</button>` : ""}`);
 
   const send = async (body, done) => {
@@ -2029,18 +2149,25 @@ async function renderBand() {
     catch (e) { toast(e.message); }
   };
   const ask = (q, v = "") => { const a = prompt(q, v); return a && a.trim() ? a.trim() : null; };
+  wireLikes($("#main"), renderBand);
   $$("[data-sl]").forEach((x) => x.onclick = () => { bandSel = x.dataset.sl; renderBand(); });
   $$("[data-song]").forEach((r) => r.onclick = (e) => { if (!e.target.closest("button")) openReview(r.dataset.song, r.dataset.where === "quickplay"); });
   $$("[data-mv]").forEach((x) => x.onclick = () => send({ op: "song_move", setlist: bandSel, index: +x.dataset.i, step: +x.dataset.mv }));
   $$("[data-rm]").forEach((x) => x.onclick = () => send({ op: "song_remove", setlist: bandSel, index: +x.dataset.rm }));
   $$("[data-kick]").forEach((x) => x.onclick = () => { if (confirm(`Take ${x.dataset.kick} out of ${b.name}?`)) send({ op: "remove_member", name: x.dataset.kick }); });
   const on = (sel, fn) => { const el = $(sel); if (el) el.onclick = fn; };
+  const role = () => send({ op: "role", inst: $("#myinst").value, level: $("#mylevel") ? +$("#mylevel").value : 6 });
+  if ($("#myinst")) $("#myinst").onchange = role;
+  if ($("#mylevel")) $("#mylevel").onchange = role;
   on("#addmembtn", () => send({ op: "add_member", name: $("#addmem").value }, () => toast("Added to the band")));
+  on("#makeset", () => makeSet(b, (sid) => { bandSel = sid; renderBand(); }));
   on("#slnew", () => { const n = ask("Name the new set list", "Set " + (b.setlists.length + 1)); if (n) send({ op: "setlist_new", name: n }, (r) => { bandSel = r.setlists[r.setlists.length - 1].id; }); });
   on("#slren", () => { const n = ask("Rename the set list", sl.name); if (n) send({ op: "setlist_rename", setlist: bandSel, name: n }); });
   on("#sldel", () => { if (confirm(`Delete the set list “${sl.name}”?`)) send({ op: "setlist_delete", setlist: bandSel }); });
   on("#bren", async () => { const n = await askBandName("Rename the band", b.name); if (n && n !== b.name) send({ op: "rename", name: n }); });
   on("#logoedit", () => editLogo(b, renderBand)); on("#logoimg", () => editLogo(b, renderBand));
+  on("#bioedit", () => editBio(b, renderBand));
+  on("#togigs", () => { partyTab = "gigs"; location.hash = "party"; });
   on("#bdel", () => { if (confirm(`Delete ${b.name} and all its set lists?`)) send({ op: "delete" }); });
   on("#bleave", () => { if (confirm(`Leave ${b.name}?`)) send({ op: "leave" }, () => toast(`You left ${b.name}`)); });
 
@@ -2054,15 +2181,182 @@ async function renderBand() {
     let hits;
     try { hits = await api("/api/songs/find?" + qs({ q: bandQ, limit: 12 })); } catch (e) { box.innerHTML = `<p class="chip red">${esc(e.message)}</p>`; return; }
     if (q.value !== bandQ) return;
-    const on = new Set(sl.songs.map((s) => s.key));
+    const onList = new Set(sl.songs.map((s) => s.key));
     box.innerHTML = hits.length ? hits.map((s) => `<div class="item">${coverHTML(s, "setcover small", 120)}
         <div class="grow" style="min-width:0"><div class="t ellipsis">${esc(s.title || s.name)}</div><div class="faint ellipsis">${esc(s.artist || "Unknown artist")}</div></div>
-        ${WHERE[s.where]}${on.has(s.key) ? `<span class="faint">On the list</span>` : `<button class="btn small" data-addsong="${esc(s.folder)}">+ Add</button>`}</div>`).join("")
+        ${WHERE[s.where]}${onList.has(s.key) ? `<span class="faint">On the list</span>` : `<button class="btn small" data-addsong="${esc(s.folder)}">+ Add</button>`}</div>`).join("")
       : `<div class="faint" style="padding:8px 4px">No songs match.</div>`;
     $$("[data-addsong]", box).forEach((x) => x.onclick = () => send({ op: "song_add", setlist: bandSel, folder: x.dataset.addsong }, () => toast("Added to " + sl.name)));
   };
   q.oninput = () => { clearTimeout(timer); timer = setTimeout(search, 200); };
   if (bandQ) { search(); q.focus(); }
+}
+
+// ---------- gigs: a night's lineup, played live, with a battle of the bands ----------
+const gigOp = (id, body) => post("/api/gigs/" + encodeURIComponent(id), body);
+document.addEventListener("click", (e) => {
+  const g = e.target.closest("[data-gig]");
+  if (g && !e.defaultPrevented && !e.target.closest("button")) location.hash = "gig?" + qs({ id: g.dataset.gig });
+});
+const GIG_WORDS = { a: ["Friday Night", "Saturday Night", "Midnight", "Basement", "Garage", "Thunder", "Sonic", "Amp", "Living Room", "Backyard", "Neon", "Full Volume"],
+  b: ["Riot", "Bash", "Showdown", "Jam", "Massacre", "Spectacular", "Takeover", "Meltdown", "Fest", "Brawl", "Rumble", "Mayhem"] };
+const gigName = () => pickOne([() => `${pickOne(GIG_WORDS.a)} ${pickOne(GIG_WORDS.b)}`, () => `The Great ${pickOne(GIG_WORDS.a)} ${pickOne(GIG_WORDS.b)}`,
+  () => `${pickOne(GIG_WORDS.b)} on ${pickOne(BN.place)}`, () => `${pickOne(BN.adj)} ${pickOne(GIG_WORDS.b)}`])();
+const GIG_STATE = { planned: ["", "Coming up"], live: ["red", "Live now"], done: ["", "Over"] };
+const gigBand = (x) => ({ id: x.band, name: x.name, logo: x.logo, image: x.image });
+
+async function gigsHTML() {
+  const list = await api("/api/gigs");
+  const live = list.filter((g) => g.state === "live"), planned = list.filter((g) => g.state === "planned"), done = list.filter((g) => g.state === "done");
+  const row = (g) => `<div class="card gigcard link" data-gig="${esc(g.id)}"><div class="row spread" style="gap:8px"><b class="bandname">${esc(g.name)}</b><span class="chip ${GIG_STATE[g.state][0]}">${GIG_STATE[g.state][1]}</span></div>
+      <div class="row wrap" style="gap:6px;margin:10px 0">${g.lineup.map((x) => `<span class="bandlogo tiny" title="${esc(x.name)}">${bandArt(gigBand(x))}</span>`).join("") || `<span class="faint">No bands yet</span>`}</div>
+      <div class="faint">${plural(g.lineup.length, "band")} · put on by ${esc(g.by)}${g.state === "done" && g.winners.length ? ` · best band: ${esc(g.lineup.filter((x) => g.winners.includes(x.band)).map((x) => x.name).join(" & "))}` : ""}</div></div>`;
+  return `${live.map((g) => { const x = g.lineup[g.slot] || {}; return `<div class="card livegig link" data-gig="${esc(g.id)}"><span class="bandlogo big">${x.band ? bandArt(gigBand(x)) : ""}</span>
+      <div class="grow"><span class="chip red">Live now</span><h2 style="margin:8px 0 4px">${esc(g.name)}</h2><div>On stage: <b>${esc(x.name || "")}</b></div><div class="faint">Tap to follow along and vote for the best band</div></div></div>`; }).join("")}
+    ${planned.length ? `<h3 class="sechead">Coming up</h3><div class="people">${planned.map(row).join("")}</div>` : ""}
+    <div class="card"><h2>Put on a gig</h2>
+      <div class="row" style="gap:8px"><input id="gigname" class="grow" maxlength="40" placeholder="Gig name, e.g. Friday Night Riot">
+        <button class="btn" id="gigdice" title="Random gig name" aria-label="Random gig name">${DICE}</button><button class="btn primary" id="gignew">Make it</button></div>
+      <p class="faint" style="margin-bottom:0">Add bands to the lineup and pick what each one plays. When the show starts, everyone can follow along and vote for the best band.</p></div>
+    ${done.length ? `<h3 class="sechead">Past gigs</h3><div class="people">${done.map(row).join("")}</div>` : ""}`;
+}
+function wireGigs(body) {
+  const go = async () => {
+    try { const g = await post("/api/gigs", { name: $("#gigname", body).value }); location.hash = "gig?" + qs({ id: g.id }); } catch (e) { toast(e.message); }
+  };
+  $("#gignew", body).onclick = go;
+  $("#gigdice", body).onclick = () => { $("#gigname", body).value = gigName(); };
+  $("#gigname", body).onkeydown = (e) => { if (e.key === "Enter") go(); };
+}
+
+const songLine = (s, extra = "") => `${coverHTML(s, "setcover", 120)}<div class="grow" style="min-width:0"><div class="t ellipsis">${esc(s.title)}</div>
+  <div class="faint ellipsis">${esc(s.artist || "Unknown artist")}${s.length ? ` · ${fmtLen(s.length)}` : ""}</div>${s.here ? tiersHTML(s.tiers) : ""}</div>${extra}`;
+
+async function renderGig() {
+  const id = hashArg("id");
+  let g, bands;
+  try { [g, bands] = await Promise.all([api("/api/gigs/" + encodeURIComponent(id)), api("/api/bands")]); }
+  catch (e) { page("Gig", "", `<div class="card empty">${esc(e.message)}</div>`, `<button class="btn small" data-go="party">&larr; Party</button>`); return; }
+  if (view() !== "gig" || hashArg("id") !== id) return;
+  const run = g.can_run, total = g.lineup.reduce((t, x) => t + x.length, 0);
+  const actions = `<button class="btn small" data-go="party">&larr; Party</button><button class="btn small" id="poster">Poster</button>${run ? `<button class="btn small" id="gren">Rename</button><button class="btn small danger" id="gdel">Delete</button>` : ""}`;
+  const sub = `<span class="chip ${GIG_STATE[g.state][0]}">${GIG_STATE[g.state][1]}</span> Put on by <b class="link" data-user="${esc(g.by)}">${esc(g.by)}</b> · ${plural(g.lineup.length, "band")}${total ? ` · ${fmtLen(total)}` : ""}`;
+  let body = "";
+  if (g.state === "planned") {
+    const free = bands.filter((b) => !g.lineup.some((x) => x.band === b.id));
+    body = `<div class="card"><h2>Lineup</h2>${g.lineup.length ? g.lineup.map((x, i) => `<div class="item lineup">
+        <span class="setno">${i + 1}</span><span class="bandlogo">${bandArt(gigBand(x))}</span>
+        <div class="grow" style="min-width:0"><b class="link" data-band="${esc(x.band)}">${esc(x.name)}</b>
+          ${run || x.mine ? `<div><select data-setfor="${i}" aria-label="Set list">${x.setlists.map((s) => `<option value="${esc(s.id)}" ${s.id === x.setlist ? "selected" : ""}>${esc(s.name)} (${s.n})</option>`).join("") || `<option value="">No set lists</option>`}</select></div>`
+            : `<div class="faint">${esc(x.setlist_name || "No set list")}</div>`}
+          <div class="faint">${plural(x.songs.length, "song")}${x.length ? ` · ${fmtLen(x.length)}` : ""}</div></div>
+        <div class="row setbtns">${run ? `<button class="btn small" data-gmv="-1" data-i="${i}" ${i ? "" : "disabled"} aria-label="Earlier">&#8593;</button><button class="btn small" data-gmv="1" data-i="${i}" ${i < g.lineup.length - 1 ? "" : "disabled"} aria-label="Later">&#8595;</button>` : ""}
+          ${run || x.mine ? `<button class="btn small danger" data-grm="${i}" aria-label="Take off the lineup">&#10005;</button>` : ""}</div></div>`).join("")
+      : `<div class="empty">No bands on the lineup yet.</div>`}
+      ${free.length ? `<div class="row wrap" style="gap:8px;margin-top:14px"><select id="addband">${free.map((b) => `<option value="${esc(b.id)}">${esc(b.name)}</option>`).join("")}</select><button class="btn small" id="addbandbtn">Add to the lineup</button></div>`
+        : bands.length ? "" : `<p class="faint">No bands yet: start one in Party &rarr; Bands.</p>`}</div>
+      ${run ? `<div class="card row spread wrap" style="gap:10px"><span>Ready? Starting the show locks the lineup and opens the voting.</span><button class="btn primary big" id="gstart" ${g.lineup.length ? "" : "disabled"}>Start the show</button></div>` : ""}`;
+  } else {
+    const x = g.lineup[g.slot] || g.lineup[0], live = g.state === "live";
+    const votes = g.lineup.map((y) => `<button class="votebtn${g.my_vote === y.band ? " on" : ""}${g.winners.includes(y.band) && !live ? " won" : ""}" data-vote="${esc(y.band)}" ${y.mine ? "disabled title=\"Your band\"" : ""}>
+        <span class="bandlogo tiny">${bandArt(gigBand(y))}</span><span class="grow ellipsis">${esc(y.name)}</span><b>${g.tally[y.band] || 0}</b></button>`).join("");
+    const results = !live && g.winners.length ? `<div class="card winner"><span class="bandlogo big">${bandArt(gigBand(g.lineup.find((y) => y.band === g.winners[0])))}</span>
+        <div class="grow"><div class="chip yellow">Best band tonight</div><h2 style="margin:8px 0 4px">${esc(g.lineup.filter((y) => g.winners.includes(y.band)).map((y) => y.name).join(" & "))}</h2>
+        <div class="faint">${plural(g.votes, "vote")} in all</div></div></div>` : "";
+    body = `${results}${live && x ? `<div class="card stage"><div class="row wrap" style="gap:18px;align-items:center"><span class="bandlogo huge">${bandArt(gigBand(x))}</span>
+        <div class="grow" style="min-width:0"><span class="chip red">On stage</span><h2 style="margin:8px 0 2px">${esc(x.name)}</h2><div class="faint">${esc(x.setlist_name)} · song ${Math.min(g.song + 1, x.songs.length)} of ${x.songs.length}</div></div></div>
+        ${x.songs[g.song] ? `<div class="item nowsong">${songLine(x.songs[g.song])}</div>` : `<div class="empty">This band has no songs on its set list.</div>`}
+        <div class="row wrap" style="gap:8px;margin-top:12px"><button class="btn" id="prevsong" ${g.song > 0 ? "" : "disabled"}>&#9664; Back</button>
+          <button class="btn primary grow" id="nextsong" ${x.songs.length ? "" : "disabled"}>${g.song < x.songs.length - 1 ? "Played it &#10003; Next song" : "Played it &#10003;"}</button>
+          ${g.slot < g.lineup.length - 1 ? `<button class="btn" id="nextband">Next band &#9654;&#9654;</button>` : ""}</div></div>` : ""}
+      ${g.lineup.map((y, i) => `<details class="card fold" ${live && i === g.slot ? "open" : ""}><summary><span class="bandlogo tiny">${bandArt(gigBand(y))}</span><h2>${esc(y.name)}</h2>
+          <span class="faint">${live ? (i < g.slot ? "Done" : i === g.slot ? "On stage" : i === g.slot + 1 ? "Up next" : "Later") : `${y.done.length} of ${y.songs.length} played`}</span></summary>
+        ${y.songs.map((s, k) => `<div class="item gigsong${y.done.includes(k) ? " played" : ""}${live && i === g.slot && k === g.song ? " now" : ""}">
+          <button class="tick${y.done.includes(k) ? " on" : ""}" data-tick="${i}:${k}" aria-label="Played">&#10003;</button>${songLine(s, live ? `<button class="btn small" data-goto="${i}:${k}">Play this</button>` : "")}</div>`).join("") || `<div class="empty">No songs.</div>`}</details>`).join("")}
+      <div class="card"><h2>${live ? "Vote for the best band" : "Battle of the bands"}</h2><p class="faint" style="margin-top:0">${live ? "One vote each; tap another band to change it. No voting for your own band!" : "The votes are in."}</p>
+        <div class="votes">${votes}</div></div>
+      ${run ? `<div class="card row spread wrap" style="gap:10px">${live ? `<span>All done?</span><button class="btn primary" id="gend">End the show</button>` : `<span>Play it again with a fresh lineup?</span><button class="btn" id="greopen">Run it again</button>`}</div>` : ""}`;
+  }
+  page(esc(g.name), sub, body, actions);
+
+  const send = async (b2, done) => { try { const r = await gigOp(id, b2); if (r.deleted) { partyTab = "gigs"; location.hash = "party"; return; } if (done) done(r); renderGig(); } catch (e) { toast(e.message); } };
+  const on = (sel, fn) => { const el = $(sel); if (el) el.onclick = fn; };
+  on("#addbandbtn", () => send({ op: "add_band", band: $("#addband").value }));
+  $$("[data-setfor]").forEach((x) => x.onchange = () => send({ op: "set_setlist", index: +x.dataset.setfor, setlist: x.value }));
+  $$("[data-gmv]").forEach((x) => x.onclick = () => send({ op: "move_band", index: +x.dataset.i, step: +x.dataset.gmv }));
+  $$("[data-grm]").forEach((x) => x.onclick = () => send({ op: "remove_band", index: +x.dataset.grm }));
+  on("#gstart", () => send({ op: "start" }, () => confetti()));
+  const cur = g.lineup[g.slot];
+  on("#nextsong", async () => {
+    await gigOp(id, { op: "tick", slot: g.slot, song: g.song, played: true }).catch((e) => toast(e.message));
+    if (g.song < cur.songs.length - 1) send({ op: "goto", slot: g.slot, song: g.song + 1 }); else renderGig();
+  });
+  on("#prevsong", () => send({ op: "goto", slot: g.slot, song: g.song - 1 }));
+  on("#nextband", () => send({ op: "goto", slot: g.slot + 1, song: 0 }));
+  $$("[data-goto]").forEach((x) => x.onclick = () => { const [i, k] = x.dataset.goto.split(":").map(Number); send({ op: "goto", slot: i, song: k }); });
+  $$("[data-tick]").forEach((x) => x.onclick = () => { const [i, k] = x.dataset.tick.split(":").map(Number); send({ op: "tick", slot: i, song: k, played: !x.classList.contains("on") }); });
+  $$("[data-vote]").forEach((x) => x.onclick = () => send({ op: "vote", band: x.dataset.vote }, () => toast("Vote counted")));
+  on("#gend", () => { if (confirm("End the show? Voting stays open after.")) send({ op: "end" }, () => confetti()); });
+  on("#greopen", () => { if (confirm("Start this gig over? The votes and ticks are cleared.")) send({ op: "reopen" }); });
+  on("#gren", async () => { const n = prompt("Rename the gig", g.name); if (n && n.trim()) send({ op: "rename", name: n.trim() }); });
+  on("#gdel", () => { if (confirm(`Delete ${g.name}?`)) send({ op: "delete" }); });
+  on("#poster", () => showPoster(g));
+}
+
+// ---------- tour poster: the lineup with every band's logo, saved as a picture ----------
+const toDataURL = async (url) => { const b = await (await fetch(url)).blob(); return await new Promise((r) => { const f = new FileReader(); f.onload = () => r(f.result); f.readAsDataURL(b); }); };
+async function posterSVG(g) {
+  const W = 600, H = 900, n = g.lineup.length || 1, top = 300, slot = Math.min(150, (H - top - 90) / n), size = Math.min(120, slot - 16);
+  const when = new Date((g.started || g.t) * 1000).toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" });
+  const rows = await Promise.all(g.lineup.map(async (x, i) => {
+    const y = top + Math.max(0, (H - 90 - top - n * slot) / 2) + i * slot, art = x.image
+      ? `<image href="${await toDataURL(`/api/bands/${encodeURIComponent(x.band)}/image?v=${x.image}`)}" x="40" y="${y}" width="${size}" height="${size}" preserveAspectRatio="xMidYMid meet"/>`
+      : logoSVG(gigBand(x)).replace('<svg viewBox="0 0 160 160"', `<svg x="40" y="${y}" width="${size}" height="${size}" viewBox="0 0 160 160"`);
+    const big = i === 0 ? 40 : 30;
+    return `${art}<text x="${60 + size}" y="${y + size / 2 - 6}" font-family="Impact, 'Arial Black', sans-serif" font-size="${big}" fill="#fff" dominant-baseline="central"${x.name.length * big * .55 > 480 - size ? ` textLength="${480 - size}" lengthAdjust="spacingAndGlyphs"` : ""}>${esc(x.name.toUpperCase())}</text>
+      <text x="${60 + size}" y="${y + size / 2 + 30}" font-family="system-ui, sans-serif" font-size="16" fill="#c4b5fd">${esc(x.setlist_name || "")}${x.songs.length ? ` · ${x.songs.length} songs` : ""}${x.length ? ` · ${fmtLen(x.length)}` : ""}</text>`;
+  }));
+  const title = g.name.toUpperCase(), tfs = Math.min(72, 1000 / Math.max(title.length, 1));
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}"><defs>
+      <linearGradient id="pbg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1e1048"/><stop offset=".6" stop-color="#0c0d1a"/><stop offset="1" stop-color="#3b0a2a"/></linearGradient>
+      <linearGradient id="ptx" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fde047"/><stop offset="1" stop-color="#f97316"/></linearGradient></defs>
+    <rect width="${W}" height="${H}" fill="url(#pbg)"/>
+    ${Array.from({ length: 18 }, (_, i) => { const a1 = i * Math.PI / 9, a2 = a1 + Math.PI / 18, p = (t) => `${(300 + 700 * Math.cos(t)).toFixed(0)},${(130 + 700 * Math.sin(t)).toFixed(0)}`; return `<polygon points="300,130 ${p(a1)} ${p(a2)}" fill="#8b5cf6" opacity=".08"/>`; }).join("")}
+    <text x="300" y="70" text-anchor="middle" font-family="system-ui, sans-serif" font-size="20" letter-spacing="6" fill="#c4b5fd">ROCKWIZARD PRESENTS</text>
+    <text x="300" y="${150}" text-anchor="middle" font-family="Impact, 'Arial Black', sans-serif" font-size="${tfs.toFixed(0)}" fill="url(#ptx)" stroke="#0b0c18" stroke-width="3" paint-order="stroke" dominant-baseline="central"${title.length * tfs * .55 > 540 ? ` textLength="540" lengthAdjust="spacingAndGlyphs"` : ""}>${esc(title)}</text>
+    <text x="300" y="220" text-anchor="middle" font-family="system-ui, sans-serif" font-size="22" fill="#fff">${esc(when)}</text>
+    <rect x="40" y="252" width="520" height="3" fill="#8b5cf6"/>
+    ${rows.join("")}
+    <text x="300" y="${H - 40}" text-anchor="middle" font-family="system-ui, sans-serif" font-size="18" letter-spacing="3" fill="#c4b5fd">${g.lineup.length > 1 ? "BATTLE OF THE BANDS · VOTE IN ROCKWIZARD" : "LIVE IN CLONE HERO"}</text></svg>`;
+}
+async function showPoster(g) {
+  const scrim = document.createElement("div"); scrim.className = "scrim";
+  const m = document.createElement("div"); m.className = "modal card avmodal";
+  m.innerHTML = `<div class="avtop"><div class="row spread"><h2 style="margin:0">Poster</h2><button class="btn small" id="px">Close</button></div></div>
+    <div class="avbody"><div class="poster"><span class="spinner"></span></div></div>
+    <div class="avfoot"><span class="grow"></span><button class="btn primary" id="psave" disabled>Save picture</button></div>`;
+  document.body.append(scrim, m);
+  const close = () => { scrim.remove(); m.remove(); };
+  scrim.onclick = close; $("#px", m).onclick = close;
+  let svg;
+  try { svg = await posterSVG(g); } catch (e) { $(".poster", m).innerHTML = `<p class="chip red">${esc(e.message)}</p>`; return; }
+  $(".poster", m).innerHTML = svg;
+  const save = $("#psave", m);
+  save.disabled = false;
+  save.onclick = async () => {
+    try {
+      const img = new Image();
+      img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
+      await img.decode();
+      const c = document.createElement("canvas"); c.width = 1200; c.height = 1800;
+      c.getContext("2d").drawImage(img, 0, 0, 1200, 1800);
+      const blob = await new Promise((r) => c.toBlob(r, "image/png"));
+      const file = new File([blob], `${g.name.replace(/[^\w\- ]+/g, "").trim() || "gig"} poster.png`, { type: "image/png" });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: g.name }); return; }
+      const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = file.name; a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    } catch (e) { if (e.name !== "AbortError") toast("Couldn't save the poster: " + e.message); }
+  };
 }
 
 // from a song's drawer: pick one of your bands' set lists

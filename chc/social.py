@@ -6,7 +6,8 @@
 - hearts (each person's favourite songs),
 - tonight's setlist,
 - each person's avatar, built from a few simple parts and drawn by the web app,
-- bands: a few people together, with their own set lists.
+- bands: a few people together, with their own set lists, fans, who plays what, and a bio,
+- gigs: a night's lineup of bands and their set lists, played live, with votes for the best band.
 
 A person is a name (the same name on two phones is the same person), compared without case.
 Songs are keyed by "artist|title" in lower case, so a renamed folder keeps its hearts.
@@ -34,7 +35,7 @@ def _d() -> dict:
         except (OSError, ValueError):
             _data = {}
         for key, empty in (("events", []), ("next_id", 1), ("rev", 0), ("profiles", {}), ("shame", {}),
-                           ("hearts", {}), ("setlist", []), ("bands", {})):
+                           ("hearts", {}), ("setlist", []), ("bands", {}), ("gigs", {})):
             _data.setdefault(key, empty)
     return _data
 
@@ -121,7 +122,7 @@ AVATAR_PARTS = {
     "facial_hair": ["none", "stubble", "moustache", "goatee", "beard"],
     "glasses": ["none", "shades", "round", "stars", "hearts", "visor", "eyepatch"],
     "hat": ["none", "beanie", "cap", "cowboy", "crown", "horns", "halo", "headband", "headphones", "tophat", "wizard"],
-    "top": ["tee", "hoodie", "jacket", "tank", "bandtee", "collar"],
+    "top": ["tee", "hoodie", "jacket", "tank", "bandtee", "collar", "merch"],
     "top_color": ["#1f2937", "#f8fafc", "#ef4444", "#f97316", "#facc15", "#22c55e", "#3b82f6", "#8b5cf6", "#ec4899",
                   "#78350f"],
     "extra": ["none", "earrings", "nosering", "chain", "freckles", "blush", "facepaint", "scar"],
@@ -141,6 +142,8 @@ def _avatar_clean(a: dict) -> dict:
     out = {k: str(a.get(k, opts[0])) for k, opts in AVATAR_PARTS.items()}
     if any(v not in AVATAR_PARTS[k] for k, v in out.items()):
         raise ValueError("unknown avatar part")
+    band = str(a.get("band") or "")  # the band on a "merch" top: one that exists, else none
+    out["band"] = band if band in _d()["bands"] else ""
     return out
 
 
@@ -284,6 +287,7 @@ def setlist_clear(played_only: bool = False) -> None:
 
 
 # ---------- bands ----------
+INSTRUMENTS = ("guitar", "bass", "drums", "vocals")
 # A band's logo, like an avatar, is a choice from each list (the web app draws it with the band's name).
 LOGO_COLORS = ["#ef4444", "#f97316", "#facc15", "#22c55e", "#14b8a6", "#3b82f6", "#8b5cf6", "#ec4899", "#f8fafc",
                "#9ca3af", "#111827", "#78350f"]
@@ -386,10 +390,28 @@ def band_edit(bid: str, op: str, **a) -> None:
             b["members"].append(a["name"])
         elif op == "remove_member":
             b["members"] = [m for m in b["members"] if key_of(m) != key_of(a["name"])]
+            b.get("roles", {}).pop(key_of(a["name"]), None)
             if not b["members"]:
                 del _d()["bands"][bid]
         elif op == "setlist_new":
-            b["setlists"].append({"id": secrets.token_hex(4), "name": _clean(a["name"], "set list"), "songs": []})
+            b["setlists"].append({"id": secrets.token_hex(4), "name": _clean(a["name"], "set list"),
+                                  "songs": list(a.get("songs") or [])})
+        elif op == "like":  # a fan of the band, or not any more
+            fans = b.setdefault("fans", [])
+            k = key_of(a["name"])
+            if any(key_of(f) == k for f in fans):
+                b["fans"] = [f for f in fans if key_of(f) != k]
+            else:
+                fans.append(a["name"])
+        elif op == "role":  # what a member plays, and up to which difficulty they're happy
+            inst = str(a.get("inst") or "")
+            if inst not in ("", *INSTRUMENTS):
+                raise ValueError("unknown instrument")
+            level = max(0, min(6, int(a.get("level", 6))))
+            b.setdefault("roles", {})[key_of(a["name"])] = {"inst": inst, "level": level}
+        elif op == "bio":
+            b["bio"] = " ".join(str(a.get("bio") or "").split())[:300]
+            b["genre"] = " ".join(str(a.get("genre") or "").split())[:40]
         elif op == "setlist_rename":
             _setlist(b, a["setlist"])["name"] = _clean(a["name"], "set list")
         elif op == "setlist_delete":
@@ -411,6 +433,106 @@ def band_edit(bid: str, op: str, **a) -> None:
                 j = i + (1 if int(a["step"]) > 0 else -1)
                 if 0 <= j < len(songs):
                     songs[i], songs[j] = songs[j], songs[i]
+        else:
+            raise ValueError("unknown change")
+        _save()
+
+
+# ---------- gigs ----------
+# {id: {"id", "name", "by", "t", "state": "planned" | "live" | "done", "started", "ended",
+#       "lineup": [{"band", "setlist", "songs": [...] (copied when the show starts), "done": [song numbers]}],
+#       "slot", "song" (who's on and which song, while live), "votes": {voter key: band id}}}
+def _gig(gid: str) -> dict:
+    g = _d()["gigs"].get(gid)
+    if not g:
+        raise KeyError("That gig doesn't exist any more")
+    return g
+
+
+def gigs() -> list[dict]:
+    with _lock:
+        return json.loads(json.dumps(sorted(_d()["gigs"].values(), key=lambda g: -g["t"])))
+
+
+def gig(gid: str) -> dict:
+    with _lock:
+        return json.loads(json.dumps(_gig(gid)))
+
+
+def gig_create(name: str, by: str) -> dict:
+    with _lock:
+        gid = secrets.token_hex(4)
+        g = {"id": gid, "name": _clean(name, "gig"), "by": by, "t": time.time(), "state": "planned",
+             "lineup": [], "slot": 0, "song": 0, "votes": {}}
+        _d()["gigs"][gid] = g
+        _save()
+        return json.loads(json.dumps(g))
+
+
+def gig_edit(gid: str, op: str, **a) -> None:
+    """One change to a gig; the server checks who may make it, and copies the set lists in for "start"."""
+    with _lock:
+        g = _gig(gid)
+        line = g["lineup"]
+
+        def slot(i):
+            i = int(i)
+            if not 0 <= i < len(line):
+                raise KeyError("That spot in the lineup is gone")
+            return i
+        if op == "rename":
+            g["name"] = _clean(a["name"], "gig")
+        elif op == "delete":
+            del _d()["gigs"][gid]
+        elif op == "add_band":
+            if g["state"] != "planned":
+                raise ValueError("The show has started: the lineup is set")
+            if any(x["band"] == a["band"] for x in line):
+                raise ValueError("That band is already on the lineup")
+            line.append({"band": a["band"], "setlist": a.get("setlist", ""), "songs": [], "done": []})
+        elif op == "remove_band":
+            if g["state"] != "planned":
+                raise ValueError("The show has started: the lineup is set")
+            line.pop(slot(a["index"]))
+        elif op == "move_band":
+            if g["state"] != "planned":
+                raise ValueError("The show has started: the lineup is set")
+            i = slot(a["index"])
+            j = i + (1 if int(a["step"]) > 0 else -1)
+            if 0 <= j < len(line):
+                line[i], line[j] = line[j], line[i]
+        elif op == "set_setlist":
+            if g["state"] != "planned":
+                raise ValueError("The show has started: the lineup is set")
+            line[slot(a["index"])]["setlist"] = str(a["setlist"])
+        elif op == "start":
+            if not line:
+                raise ValueError("Add a band to the lineup first")
+            for x, songs in zip(line, a["songs"]):
+                x["songs"], x["done"] = songs, []
+            g.update(state="live", slot=0, song=0, started=time.time(), votes={})
+        elif op == "goto":  # who's on, and which song (the song is ticked off when moving past it)
+            i = slot(a["slot"])
+            n = len(line[i]["songs"])
+            g["slot"], g["song"] = i, max(0, min(int(a.get("song", 0)), max(n - 1, 0)))
+        elif op == "tick":  # a song played (or not)
+            x = line[slot(a["slot"])]
+            k = int(a["song"])
+            if not 0 <= k < len(x["songs"]):
+                raise KeyError("That song isn't on the set any more")
+            x["done"] = sorted(set(x["done"]) - {k}) if not a.get("played", True) else sorted(set(x["done"]) | {k})
+        elif op == "end":
+            g.update(state="done", ended=time.time())
+        elif op == "reopen":
+            g.update(state="planned", slot=0, song=0, votes={})
+            for x in line:
+                x["songs"], x["done"] = [], []
+        elif op == "vote":  # the best band tonight: one vote each, changed by voting again
+            if g["state"] == "planned":
+                raise ValueError("Voting opens when the show starts")
+            if not any(x["band"] == a["band"] for x in line):
+                raise ValueError("That band isn't playing this gig")
+            g["votes"][key_of(a["name"])] = a["band"]
         else:
             raise ValueError("unknown change")
         _save()

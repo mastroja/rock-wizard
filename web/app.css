@@ -585,6 +585,7 @@ b.link:hover, span.link:hover { text-decoration: underline; }
 .logoopt.on { border-color: #fff; }
 .logoopt .bandlogo { width: 56px; height: 56px; }
 .bandcard { display: flex; gap: 14px; align-items: center; }
+.bandname { display: block; overflow-wrap: anywhere; line-height: 1.25; }
 .bandhero { display: flex; gap: 20px; align-items: center; }
 .dice { width: 18px; height: 18px; display: block; }
 .avpreview { display: grid; place-items: center; margin: 14px 0 10px; }
@@ -606,4 +607,53 @@ b.link:hover, span.link:hover { text-decoration: underline; }
   .avpreview .bandlogo.huge { width: 112px; height: 112px; }
   .bandhero { flex-direction: column; text-align: center; }
   .bandhero .row, .bandhero .stats { justify-content: center; }
+}
+
+/* ---------- likes, roles, gigs, posters ---------- */
+.likebtn { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border); background: var(--bg2); color: var(--muted);
+  border-radius: 99px; padding: 6px 12px; cursor: pointer; font-weight: 700; flex: none; transition: transform .15s, color .15s, border-color .15s; }
+.likebtn:hover:not([disabled]) { transform: scale(1.06); color: var(--text); border-color: var(--accent); }
+.likebtn.on { color: #facc15; border-color: #facc15; background: rgba(250, 204, 21, .12); }
+.likebtn[disabled] { opacity: .55; cursor: default; }
+.rock { width: 18px; height: 18px; fill: currentColor; display: block; }
+.bandcard .likebtn { align-self: flex-start; }
+.bio { margin: 10px 0 0; color: var(--muted); font-style: italic; }
+.rolepick { gap: 6px; margin-top: 4px; }
+.rolepick select { background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 4px 6px; font: inherit; font-size: 12px; }
+.tiers.parts { flex-wrap: wrap; gap: 8px; }
+.tiers.parts span { display: inline-flex; align-items: center; gap: 4px; }
+.tiers.parts .toohard, .tiers.parts .toohard b { color: var(--bad); }
+.avatar.mini { width: 16px; height: 16px; font-size: 7px; }
+.moodopt { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; text-align: left; border: 1px solid var(--border);
+  background: var(--bg2); color: var(--text); border-radius: 10px; padding: 8px 12px; margin-bottom: 6px; cursor: pointer; font: inherit; }
+.moodopt.on { border-color: var(--accent); background: rgba(139, 92, 255, .14); }
+.sechead { margin: 18px 0 10px; color: var(--muted); font-size: 14px; text-transform: uppercase; letter-spacing: .08em; }
+.gigcard { margin: 0; }
+.livegig { display: flex; gap: 18px; align-items: center; border-color: var(--bad); box-shadow: 0 0 0 1px rgba(255, 93, 114, .3), 0 10px 40px rgba(255, 93, 114, .15); }
+.gigdot { width: 10px; height: 10px; border-radius: 50%; background: var(--faint); flex: none; }
+.gigdot.live { background: var(--bad); box-shadow: 0 0 0 4px rgba(255, 93, 114, .25); }
+.gigdot.done { background: var(--good); }
+.lineup select { background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 4px 8px; font: inherit; font-size: 13px; margin: 4px 0; }
+#addband { background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 10px; padding: 7px 10px; font: inherit; min-width: 160px; }
+.stage { border-color: var(--bad); background: linear-gradient(180deg, rgba(255, 93, 114, .1), transparent 60%), var(--surface); }
+.nowsong { margin-top: 14px; border: 1px solid var(--border); border-radius: 12px; padding: 10px; background: var(--bg2); }
+.gigsong { gap: 10px; }
+.gigsong.played .t { text-decoration: line-through; opacity: .55; }
+.gigsong.now { background: rgba(255, 93, 114, .1); border-radius: 10px; }
+.tick { width: 28px; height: 28px; border-radius: 50%; border: 2px solid var(--border); background: none; color: transparent; cursor: pointer; flex: none; font-weight: 700; }
+.tick.on { background: var(--good); border-color: var(--good); color: #fff; }
+details.fold summary .bandlogo.tiny { margin-right: 4px; }
+.votes { display: grid; gap: 8px; }
+.votebtn { display: flex; align-items: center; gap: 10px; border: 1px solid var(--border); background: var(--bg2); color: var(--text); border-radius: 12px;
+  padding: 8px 12px; cursor: pointer; font: inherit; text-align: left; transition: border-color .15s, transform .15s; }
+.votebtn:hover:not([disabled]) { border-color: var(--accent); transform: translateY(-1px); }
+.votebtn.on { border-color: var(--accent); background: rgba(139, 92, 255, .16); }
+.votebtn.won { border-color: #facc15; }
+.votebtn[disabled] { opacity: .6; cursor: default; }
+.winner { display: flex; gap: 18px; align-items: center; border-color: #facc15; background: linear-gradient(180deg, rgba(250, 204, 21, .12), transparent 70%), var(--surface); }
+.poster { display: grid; place-items: center; padding: 10px 0; }
+.poster svg { width: 100%; max-width: 420px; height: auto; border-radius: 10px; box-shadow: 0 10px 40px rgba(0, 0, 0, .5); }
+@media (max-width: 760px) {
+  .livegig, .winner { flex-direction: column; text-align: center; }
+  .bandcard { flex-wrap: wrap; }
 }
