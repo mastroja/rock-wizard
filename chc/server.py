@@ -798,6 +798,26 @@ async def staging_remove(req: Request):
     return {"ok": True}
 
 
+@app.post("/api/live/remove")
+async def live_remove(req: Request):
+    """Send a Quickplay song to the Recycle Bin (Syncthing then takes it off the Deck). RockWizard's
+    songs, the owner's own charts and downloaded charts only: other human charts are never touched."""
+    require_owner(req)
+    f = body_folder((await req.json())["folder"])
+    root = live_dir()
+    if not root or root.resolve() not in f.resolve().parents:
+        raise HTTPException(403, "Only songs in Quickplay can be removed here")
+    if not (library.is_ours(f) or library.is_mine(f) or library.is_downloaded(f)):
+        raise HTTPException(403, "Human charts in Quickplay are view-only, so they're never removed by accident")
+    if any(j.status in ("queued", "running") and j.args.get("folder") == str(f) for j in jobs.values()):
+        raise HTTPException(409, "This song is being re-charted. Cancel that first")
+    n, errs = library.recycle([f])
+    if not n:
+        raise HTTPException(500, errs[0])
+    _people["t"] = 0  # profiles and set lists stop showing it
+    return {"ok": True}
+
+
 GAMES = {"clonehero": ("clonehero_exe", "Clone Hero"), "yarg": ("yarg_exe", "YARG")}
 
 

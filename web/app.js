@@ -916,6 +916,14 @@ async function openReview(folder, live = false) {
   };
   $("#bandadd", dr).onclick = () => pickSetlist(s);
   const refreshAfter = (folder2) => { openReview(folder2, live); if (view() === "staging") renderStaging(); if (view() === "live") renderLive(); };
+  const lrm = $("#liveremove", dr);
+  if (lrm) lrm.onclick = async () => {
+    const title = s.title || s.name;
+    if (!confirm(`Remove “${title}” from Quickplay?
+
+It goes to the Recycle Bin, so you can still get it back. The Deck drops it on the next sync.`)) return;
+    try { await post("/api/live/remove", { folder: s.folder }); toast(`Removed ${title} from Quickplay`); closeDrawer(); render(); } catch (e) { toast(e.message); }
+  };
   const unpub = $("#unpub", dr);
   if (unpub) unpub.onclick = async () => {
     if (!confirm("Move this song back to staging? It leaves your live library (and the Deck after the next sync).")) return;
@@ -991,7 +999,8 @@ function moreHTML(s, live, local) {
     live && s.ours ? `<button class="btn small" id="unpub">Move back to staging</button>` : "",
     local ? `<button class="btn small" data-open-pc="moonscraper">Open in Moonscraper</button>` : "",
     local ? `<button class="btn small" data-open-pc="folder">${ICON.folder} Folder</button>` : "",
-    live ? "" : `<button class="btn small danger" id="remove">Delete</button>`,
+    live ? (s.ours || s.mine || s.downloaded ? `<button class="btn small danger" id="liveremove">Remove from Quickplay</button>` : "")
+      : `<button class="btn small danger" id="remove">Delete</button>`,
   ].join("");
   return items ? `<details class="more"><summary>More options</summary><div class="row wrap">${items}</div></details>` : "";
 }
