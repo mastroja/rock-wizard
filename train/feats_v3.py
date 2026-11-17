@@ -18,7 +18,8 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 DM = {"ft_other": ("ft", "guitar", features.SR), "ft_bass": ("ft", "bass", features.SR),
       "ft_drums": ("ft", "drums", features.SR), "s6_guitar": ("s6", "guitar", features.SR),
       "ft_drums44": ("ft", "drums", 44100),
-      "sw_guitar": ("sw", "guitar", features.SR), "sw_bass": ("sw", "bass", features.SR)}
+      "sw_guitar": ("sw", "guitar", features.SR), "sw_bass": ("sw", "bass", features.SR),
+      "sw_drums": ("sw", "drums", features.SR)}
 
 
 def jobs_for(song, kinds):
