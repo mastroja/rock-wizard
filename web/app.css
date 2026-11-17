@@ -567,7 +567,25 @@ b.link:hover, span.link:hover { text-decoration: underline; }
 .member > div { flex: 1; }
 .addsong { margin-top: 14px; }
 #addmem { background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 10px; padding: 7px 10px; font: inherit; min-width: 140px; }
-.avmodal { top: 16px; max-height: calc(100vh - 32px); overflow-y: auto; width: min(480px, calc(100vw - 24px)); }
+.avmodal { top: 16px; max-height: calc(100dvh - 32px); width: min(520px, calc(100vw - 24px)); display: flex; flex-direction: column;
+  overflow: hidden; padding: 0; }
+.avtop { padding: 16px 18px 12px; border-bottom: 1px solid var(--border); flex: none; }
+.avbody { overflow-y: auto; flex: 1; min-height: 0; padding: 4px 18px 16px; overscroll-behavior: contain; }
+.avfoot { display: flex; gap: 8px; align-items: center; padding: 12px 18px; border-top: 1px solid var(--border); flex: none; }
+.avtabs { margin: 0 auto; }
+.avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.bandlogo { width: 64px; height: 64px; flex: none; display: inline-block; }
+.bandlogo svg { width: 100%; height: 100%; display: block; overflow: visible; }
+.bandlogo.tiny { width: 30px; height: 30px; }
+.bandlogo.big { width: 120px; height: 120px; }
+.bandlogo.huge { width: 150px; height: 150px; }
+.logoopt { border: 2px solid transparent; background: var(--bg2); padding: 4px; border-radius: 12px; cursor: pointer; transition: transform .15s; }
+.logoopt:hover { transform: scale(1.06); }
+.logoopt.on { border-color: #fff; }
+.logoopt .bandlogo { width: 56px; height: 56px; }
+.bandcard { display: flex; gap: 14px; align-items: center; }
+.bandhero { display: flex; gap: 20px; align-items: center; }
+.dice { width: 18px; height: 18px; display: block; }
 .avpreview { display: grid; place-items: center; margin: 14px 0 10px; }
 .avpreview .avatar { width: 120px; height: 120px; }
 .avsec { margin-top: 12px; }
@@ -580,4 +598,11 @@ b.link:hover, span.link:hover { text-decoration: underline; }
   .profhead { flex-direction: column; text-align: center; }
   .profhead .row, .profhead .stats { justify-content: center; }
   .songrow > .chip { display: none; }
+  .avpreview .avatar { width: 92px; height: 92px; }
+  .avfoot { flex-wrap: wrap; }
+  .avfoot .grow { flex-basis: 100%; height: 0; }
+  .avfoot .btn { flex: 1; justify-content: center; }
+  .avpreview .bandlogo.huge { width: 112px; height: 112px; }
+  .bandhero { flex-direction: column; text-align: center; }
+  .bandhero .row, .bandhero .stats { justify-content: center; }
 }

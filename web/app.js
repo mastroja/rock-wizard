@@ -1324,10 +1324,12 @@ const pkey = (n) => (n || "").toLowerCase().split(/\s+/).filter(Boolean).join(" 
 const colorOf = (n) => (S.people[pkey(n)] || {}).color || "";
 const tint = (n) => { const c = colorOf(n); return c ? ` style="color:${c};border-color:${c}66;background:${c}1f"` : ""; };
 const avatarOf = (n) => (S.people[pkey(n)] || {}).avatar || (pkey(n) === pkey(S.me.who) ? S.me.avatar : null);
+const photoOf = (n) => (S.people[pkey(n)] || {}).photo || (pkey(n) === pkey(S.me.who) ? S.me.photo : 0);
 // link=false for an avatar that shouldn't open a profile (the avatar builder's own previews)
 const avatar = (name, color, cls = "", link = true) => {
-  const a = avatarOf(name), bg = color || colorOf(name) || "var(--accent)";
-  return `<span class="avatar ${cls}${a ? " art" : ""}${link && name ? " link" : ""}" style="background:${bg}"${link && name ? ` data-user="${esc(name)}"` : ""}>${a ? avatarSVG(a) : esc(initials(name))}</span>`;
+  const a = avatarOf(name), ph = photoOf(name), bg = color || colorOf(name) || "var(--accent)";
+  const inner = ph ? `<img src="${photoURL(name, ph)}" alt="" loading="lazy">` : a ? avatarSVG(a) : esc(initials(name));
+  return `<span class="avatar ${cls}${a || ph ? " art" : ""}${link && name ? " link" : ""}" style="background:${bg}"${link && name ? ` data-user="${esc(name)}"` : ""}>${inner}</span>`;
 };
 const since = (t) => { const m = Math.round((Date.now() / 1000 - t) / 60); return m < 1 ? "just now" : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`; };
 const HEART = `<svg class="i-heart" viewBox="0 0 24 24"><path d="M12 20.5s-7.5-4.6-7.5-10.2A4.3 4.3 0 0 1 12 7.6a4.3 4.3 0 0 1 7.5 2.7c0 5.6-7.5 10.2-7.5 10.2z"/></svg>`;
@@ -1491,73 +1493,306 @@ function wirePeople(body) {
   });
 }
 
-// ---------- avatars: built from a few parts, drawn here (the server keeps only the choices) ----------
+// ---------- avatars: built from parts and drawn here (the server keeps only the choices), or a photo ----------
 const INK = "#2a1d17";
+const shade = (hex, f) => { const n = parseInt(hex.slice(1), 16); const c = (v) => Math.round(v * (1 - f)).toString(16).padStart(2, "0"); return `#${c(n >> 16)}${c((n >> 8) & 255)}${c(n & 255)}`; };
+const starPts = (cx, cy, r, n = 5, inner = 0.45) => Array.from({ length: n * 2 }, (_, i) => {
+  const a = Math.PI * i / n - Math.PI / 2, rr = i % 2 ? r * inner : r;
+  return `${(cx + rr * Math.cos(a)).toFixed(1)},${(cy + rr * Math.sin(a)).toFixed(1)}`;
+}).join(" ");
+const heartAt = (cx, cy, s, fill) => `<path d="M${cx} ${cy + s}l${-s * 1.1} ${-s * 1.1}a${s * .62} ${s * .62} 0 0 1 ${s * 1.1} ${-s * .9}a${s * .62} ${s * .62} 0 0 1 ${s * 1.1} ${s * .9}z" fill="${fill}"/>`;
+
 function avatarSVG(a) {
-  const sk = a.skin, hc = a.hair_color, line = `fill="none" stroke="${INK}" stroke-width="2" stroke-linecap="round"`;
+  const sk = a.skin, hc = a.hair_color, tc = a.top_color || "#1f2937", fh = a.hair === "none" ? "#3a2a20" : hc;
+  const line = (w = 2) => `fill="none" stroke="${INK}" stroke-width="${w}" stroke-linecap="round"`;
+  const earX = { wide: 13.8, long: 18.3, oval: 17.2 }[a.face] || 16.3;
   const top = `<path d="M15 30c0-12 7-17 17-17s17 5 17 17c-4-6-10-9-17-9s-13 3-17 9z" fill="${hc}"/>`;
+  const W = `fill="#fff" opacity=".16"`;
+  const pattern = { rays: Array.from({ length: 12 }, (_, i) => { const a1 = i * Math.PI / 6, a2 = a1 + Math.PI / 12, p = (t) => `${(32 + 60 * Math.cos(t)).toFixed(1)},${(32 + 60 * Math.sin(t)).toFixed(1)}`; return `<polygon points="32,32 ${p(a1)} ${p(a2)}" ${W}/>`; }).join(""),
+    dots: Array.from({ length: 64 }, (_, i) => `<circle cx="${(i % 8) * 8 + 4}" cy="${Math.floor(i / 8) * 8 + 4}" r="1.5" ${W}/>`).join(""),
+    stripes: `<path d="${Array.from({ length: 12 }, (_, i) => `M${i * 12 - 64} 64L${i * 12} 0`).join("")}" stroke="#fff" stroke-width="4" opacity=".14"/>`,
+    stars: [[10, 12, 3.4], [54, 10, 2.6], [8, 44, 2.4], [56, 40, 3.2], [20, 4, 2]].map(([x, y, r]) => `<polygon points="${starPts(x, y, r)}" fill="#fff" opacity=".45"/>`).join("") }[a.pattern] || "";
+  const back = { long: `<path d="M13 32c0-14 8-20 19-20s19 6 19 20v20H13z" fill="${hc}"/>`, bun: `<circle cx="32" cy="11" r="7" fill="${hc}"/>`,
+    afro: `<circle cx="32" cy="25" r="22" fill="${hc}"/>`, ponytail: `<path d="M45 18c9 1 13 10 10 24c-2 5-4 8-6 9c1-8 0-14-6-19z" fill="${hc}"/>`,
+    pigtails: `<circle cx="11" cy="36" r="6.5" fill="${hc}"/><circle cx="53" cy="36" r="6.5" fill="${hc}"/>`,
+    dreads: [13, 17.5, 42.5, 47].map((x) => `<rect x="${x}" y="20" width="4.5" height="30" rx="2.2" fill="${hc}"/>`).join("") }[a.hair] || "";
+  const body = `<path d="M6 66c2-11 13-16 26-16s24 5 26 16z"`, neckline = `<path d="M26.5 50.6q5.5 5 11 0z" fill="${sk}"/>`;
+  const shirt = { tee: `${body} fill="${tc}"/>${neckline}`,
+    hoodie: `${body} fill="${tc}"/><path d="M18 53c3-5 8-7 14-7s11 2 14 7c-4-2-9-3-14-3s-10 1-14 3z" fill="${shade(tc, .3)}"/><path d="M29 55v6M35 55v6" stroke="#fff" stroke-width="1.2" opacity=".8"/>`,
+    jacket: `${body} fill="${tc}"/>${neckline}<path d="M6 66c2-11 13-16 22-16l2 16z" fill="#18181b"/><path d="M58 66c-2-11-13-16-22-16l-2 16z" fill="#18181b"/>`,
+    tank: `${body} fill="${shade(sk, .06)}"/><path d="M21 66c0-7 2-12 4-15h14c2 3 4 8 4 15z" fill="${tc}"/><path d="M27 51q5 4 10 0z" fill="${sk}"/>`,
+    bandtee: `${body} fill="${tc}"/>${neckline}<path d="M34 54l-5 6h3.5l-2 5.5 6-7.5h-3.5l2.5-4z" fill="#fde047"/>`,
+    collar: `${body} fill="${tc}"/>${neckline}<path d="M25 50l7 5-3 3zM39 50l-7 5 3 3z" fill="#fff"/>` }[a.top || "tee"] || "";
   const face = { round: `<circle cx="32" cy="33" r="16" fill="${sk}"/>`, square: `<rect x="16" y="17" width="32" height="32" rx="9" fill="${sk}"/>`,
-    long: `<ellipse cx="32" cy="34" rx="14" ry="18" fill="${sk}"/>` }[a.face] || "";
-  const back = { long: `<path d="M13 32c0-14 8-20 19-20s19 6 19 20v20H13z" fill="${hc}"/>`, bun: `<circle cx="32" cy="11" r="7" fill="${hc}"/>` }[a.hair] || "";
-  const front = { short: top, long: top, bun: top,
+    long: `<ellipse cx="32" cy="34" rx="14" ry="18" fill="${sk}"/>`, oval: `<ellipse cx="32" cy="33" rx="15" ry="17" fill="${sk}"/>`,
+    wide: `<ellipse cx="32" cy="34" rx="18.5" ry="15" fill="${sk}"/>` }[a.face] || "";
+  const ears = `<circle cx="${earX}" cy="34" r="3.2" fill="${sk}"/><circle cx="${64 - earX}" cy="34" r="3.2" fill="${sk}"/>`;
+  const onFace = { freckles: [[22, 37], [24, 38.6], [21, 39.6], [42, 37], [40, 38.6], [43, 39.6]].map(([x, y]) => `<circle cx="${x}" cy="${y}" r=".75" fill="#8b5a3b" opacity=".75"/>`).join(""),
+    blush: `<ellipse cx="22" cy="38.5" rx="3" ry="1.8" fill="#f472b6" opacity=".45"/><ellipse cx="42" cy="38.5" rx="3" ry="1.8" fill="#f472b6" opacity=".45"/>`,
+    facepaint: `<polygon points="${starPts(41.5, 38.5, 3)}" fill="#ec4899"/>`,
+    scar: `<path d="M23 27.5l5 9M23.6 30.3l3-1.2M25.1 33l3-1.2" stroke="#b91c1c" stroke-width="1.1" opacity=".8" fill="none"/>` }[a.extra] || "";
+  const chin = { stubble: `<path d="M18 37c1.5 9 7.5 14 14 14s12.5-5 14-14c-3 4-8 6-14 6s-11-2-14-6z" fill="${fh}" opacity=".3"/>`,
+    goatee: `<path d="M29 45.5h6c0 3-1 6.5-3 6.5s-3-3.5-3-6.5z" fill="${fh}"/>`,
+    beard: `<path d="M17 33c0 11 7 19 15 19s15-8 15-19c-2 3-4 5-6 6c-2-2-5-3-9-3s-7 1-9 3c-2-1-4-3-6-6z" fill="${fh}"/>` }[a.facial_hair] || "";
+  const smile = `<path d="M27 40q5 5 10 0" ${line()}/>`, grin = `<path d="M26 39h12a6 6 0 0 1-12 0z" fill="#fff" stroke="${INK}" stroke-width="1.6" stroke-linejoin="round"/>`;
+  const mouth = { smile, grin, open: `<ellipse cx="32" cy="42" rx="3.2" ry="4" fill="${INK}"/>`, flat: `<path d="M27 42h10" ${line()}/>`,
+    tongue: `<ellipse cx="33.5" cy="43.2" rx="2.4" ry="2.8" fill="#ff6b8a"/>${smile}`,
+    teeth: `${grin}<path d="M26.5 41.3h11M30 39v4.6M34 39v4.6" stroke="${INK}" stroke-width=".9"/>`,
+    smirk: `<path d="M27.5 41.5q5 2 9.5-2.5" ${line()}/>`, o: `<circle cx="32" cy="42" r="2.6" ${line()}/>`,
+    fangs: `<path d="M28.4 42l1.1 2.8 1.1-2.2M33.4 42.6l1.1 2.2 1.1-2.8" fill="#fff" stroke="${INK}" stroke-width=".6"/>${smile}`,
+    sad: `<path d="M27 43.5q5-5 10 0" ${line()}/>` }[a.mouth] || "";
+  const tache = a.facial_hair === "moustache" ? `<path d="M25 39.5c3-3.5 5-2.5 7-1.2c2-1.3 4-2.3 7 1.2c-3 1-5 .8-7-.3c-2 1.1-4 1.3-7 .3z" fill="${fh}"/>` : "";
+  const dots = `<circle cx="26" cy="32" r="2.2" fill="${INK}"/><circle cx="38" cy="32" r="2.2" fill="${INK}"/>`;
+  const eyes = { dots, happy: `<path d="M23.5 33q2.5-3.5 5 0M35.5 33q2.5-3.5 5 0" ${line()}/>`,
+    wink: `<circle cx="26" cy="32" r="2.2" fill="${INK}"/><path d="M35.5 32.5h5" ${line()}/>`,
+    big: `<circle cx="26" cy="32" r="4" fill="#fff"/><circle cx="38" cy="32" r="4" fill="#fff"/><circle cx="26.8" cy="32.5" r="2" fill="${INK}"/><circle cx="38.8" cy="32.5" r="2" fill="${INK}"/>`,
+    sleepy: `<path d="M23.5 32q2.5 2 5 0M35.5 32q2.5 2 5 0" ${line()}/>`,
+    stars: `<polygon points="${starPts(26, 32, 3.4)}" fill="${INK}"/><polygon points="${starPts(38, 32, 3.4)}" fill="${INK}"/>`,
+    hearts: heartAt(26, 31.5, 2.4, "#e11d48") + heartAt(38, 31.5, 2.4, "#e11d48"),
+    angry: `<circle cx="26" cy="33" r="2" fill="${INK}"/><circle cx="38" cy="33" r="2" fill="${INK}"/><path d="M23 29.5l6 2M41 29.5l-6 2" ${line(1.6)}/>`,
+    lashes: `${dots}<path d="M23.4 30.4l-1.6-1.4M25.2 29.6l-.5-1.9M40.6 30.4l1.6-1.4M38.8 29.6l.5-1.9" ${line(1.1)}/>`,
+    dizzy: `<path d="M24 30l4 4M28 30l-4 4M36 30l4 4M40 30l-4 4" ${line(1.7)}/>` }[a.eyes] || "";
+  const brows = { flat: `<path d="M23 26.5h6M35 26.5h6" ${line(1.8)}/>`, raised: `<path d="M23 26.5q3-3 6-1.2M35 25.3q3-1.8 6 1.2" ${line(1.8)}/>`,
+    angry: `<path d="M23 25l6 2.2M41 25l-6 2.2" ${line(1.8)}/>`, thick: `<path d="M23 26.3h6M35 26.3h6" ${line(3.2)}/>` }[a.brows] || "";
+  const front = { short: top, long: top, bun: top, ponytail: top, pigtails: top, dreads: top,
+    buzz: `<path d="M16.5 28c0-9 7-13.5 15.5-13.5S47.5 19 47.5 28c-4-4-9.5-6-15.5-6s-11.5 2-15.5 6z" fill="${hc}" opacity=".9"/>`,
+    afro: `<path d="M13 31c0-14 8-21 19-21s19 7 19 21c-4-6-11-9-19-9s-15 3-19 9z" fill="${hc}"/>`,
     spiky: `<path d="M15 30l2-14 5 6 4-11 6 9 6-9 4 11 5-6 2 14c-5-6-10-8-17-8s-12 2-17 8z" fill="${hc}"/>`,
     mohawk: `<path d="M28 23V7c0-2 8-2 8 0v16z" fill="${hc}"/>`,
-    curly: [16, 22, 28, 34, 40, 46].map((x, i) => `<circle cx="${x + 1}" cy="${i % 2 ? 16 : 20}" r="6.5" fill="${hc}"/>`).join("") }[a.hair] || "";
-  const eyes = { dots: `<circle cx="26" cy="32" r="2.2" fill="${INK}"/><circle cx="38" cy="32" r="2.2" fill="${INK}"/>`,
-    happy: `<path d="M23.5 33q2.5-3.5 5 0M35.5 33q2.5-3.5 5 0" ${line}/>`,
-    wink: `<circle cx="26" cy="32" r="2.2" fill="${INK}"/><path d="M35.5 32.5h5" ${line}/>`,
-    big: `<circle cx="26" cy="32" r="4" fill="#fff"/><circle cx="38" cy="32" r="4" fill="#fff"/><circle cx="26.8" cy="32.5" r="2" fill="${INK}"/><circle cx="38.8" cy="32.5" r="2" fill="${INK}"/>`,
-    sleepy: `<path d="M23.5 32q2.5 2 5 0M35.5 32q2.5 2 5 0" ${line}/>` }[a.eyes] || "";
-  const mouth = { smile: `<path d="M27 40q5 5 10 0" ${line}/>`,
-    grin: `<path d="M26 39h12a6 6 0 0 1-12 0z" fill="#fff" stroke="${INK}" stroke-width="1.6" stroke-linejoin="round"/>`,
-    open: `<ellipse cx="32" cy="42" rx="3.2" ry="4" fill="${INK}"/>`, flat: `<path d="M27 42h10" ${line}/>`,
-    tongue: `<ellipse cx="33.5" cy="43.2" rx="2.4" ry="2.8" fill="#ff6b8a"/><path d="M27 40q5 5 10 0" ${line}/>` }[a.mouth] || "";
-  const extra = { shades: `<g fill="#111"><rect x="21" y="28.5" width="10" height="7" rx="2.5"/><rect x="33" y="28.5" width="10" height="7" rx="2.5"/></g><path d="M31 31h2M17 30l4 .5M47 30l-4 .5" stroke="#111" stroke-width="1.6"/>`,
-    headphones: `<path d="M14 35v-5a18 18 0 0 1 36 0v5" fill="none" stroke="#222" stroke-width="3.5"/><rect x="10.5" y="29" width="7" height="12" rx="3" fill="#ef4444"/><rect x="46.5" y="29" width="7" height="12" rx="3" fill="#ef4444"/>`,
-    headband: `<rect x="15" y="21" width="34" height="5" rx="2.5" fill="#ef4444"/>`,
+    curly: [16, 22, 28, 34, 40, 46].map((x, i) => `<circle cx="${x + 1}" cy="${i % 2 ? 16 : 20}" r="6.5" fill="${hc}"/>`).join(""),
+    side: `<path d="M15 31c0-13 7-18 17-18s17 5 17 14c-9-3-19-1-26 8c-3 0-6-2-8-4z" fill="${hc}"/>`,
+    emo: `<path d="M15 30c0-12 7-17 17-17s17 5 17 15c-5-3-10-4-15-3c-4 3-8 8-10 14c-3-3-6-6-9-9z" fill="${hc}"/>` }[a.hair] || "";
+  const bridge = `<path d="M30.6 32h2.8" stroke="#111" stroke-width="1.4"/>`;
+  const glasses = { shades: `<g fill="#111"><rect x="21" y="28.5" width="10" height="7" rx="2.5"/><rect x="33" y="28.5" width="10" height="7" rx="2.5"/></g><path d="M31 31h2M17 30l4 .5M47 30l-4 .5" stroke="#111" stroke-width="1.6"/>`,
+    round: `<g fill="none" stroke="#111" stroke-width="1.6"><circle cx="26" cy="32" r="4.6"/><circle cx="38" cy="32" r="4.6"/><path d="M30.6 32h2.8M21.4 31.5l-4-1M42.6 31.5l4-1"/></g>`,
+    stars: `<polygon points="${starPts(26, 32, 5.4, 5, .5)}" fill="#facc15" stroke="#b45309" stroke-width=".8"/><polygon points="${starPts(38, 32, 5.4, 5, .5)}" fill="#facc15" stroke="#b45309" stroke-width=".8"/>${bridge}`,
+    hearts: heartAt(26, 32, 3.6, "#ec4899") + heartAt(38, 32, 3.6, "#ec4899") + bridge,
+    visor: `<rect x="17" y="28" width="30" height="7.5" rx="3.75" fill="#22d3ee" opacity=".8"/><rect x="19" y="29" width="10" height="2" rx="1" fill="#fff" opacity=".6"/>`,
+    eyepatch: `<path d="M17 25.5L47 29" stroke="#111" stroke-width="1.4"/><ellipse cx="38" cy="32" rx="5" ry="4.4" fill="#111"/>` }[a.glasses] || "";
+  const hat = { beanie: `<path d="M15 26c0-11 7-16 17-16s17 5 17 16z" fill="#3b82f6"/><rect x="14" y="23" width="36" height="5" rx="2.5" fill="#2563eb"/><circle cx="32" cy="9" r="3.5" fill="#f8fafc"/>`,
+    cap: `<path d="M15.5 27c0-10.5 7-15.5 16.5-15.5s16.5 5 16.5 15.5z" fill="#ef4444"/><path d="M31 25h22c0 3-3 4.5-6 4.5H31z" fill="#b91c1c"/><circle cx="32" cy="11.8" r="1.6" fill="#b91c1c"/>`,
+    cowboy: `<ellipse cx="32" cy="22" rx="25" ry="4.5" fill="#92400e"/><path d="M21 22c0-9 3-14 6-14c2 0 3 2 5 2s3-2 5-2c3 0 6 5 6 14z" fill="#a16207"/><rect x="21" y="18" width="22" height="3" fill="#78350f"/>`,
     crown: `<path d="M21 15l2-10 5 6 4-8 4 8 5-6 2 10z" fill="#facc15" stroke="#b45309" stroke-width="1" stroke-linejoin="round"/>`,
-    beanie: `<path d="M15 26c0-11 7-16 17-16s17 5 17 16z" fill="#3b82f6"/><rect x="14" y="23" width="36" height="5" rx="2.5" fill="#2563eb"/><circle cx="32" cy="9" r="3.5" fill="#f8fafc"/>` }[a.extra] || "";
-  return `<svg viewBox="0 0 64 64" aria-hidden="true"><rect x="27" y="44" width="10" height="10" fill="${sk}"/>
-    <path d="M8 66c2-11 12-15 24-15s22 4 24 15z" fill="rgba(0,0,0,.3)"/>${back}${face}${front}${eyes}${mouth}${extra}</svg>`;
+    horns: `<path d="M19 22c-5-3-7-9-5-15c2 4 5 6 9 8z" fill="#dc2626"/><path d="M45 22c5-3 7-9 5-15c-2 4-5 6-9 8z" fill="#dc2626"/>`,
+    halo: `<ellipse cx="32" cy="8" rx="12" ry="3.2" fill="none" stroke="#fde047" stroke-width="2.6"/>`,
+    headband: `<rect x="15" y="21" width="34" height="5" rx="2.5" fill="#ef4444"/>`,
+    headphones: `<path d="M14 35v-5a18 18 0 0 1 36 0v5" fill="none" stroke="#222" stroke-width="3.5"/><rect x="10.5" y="29" width="7" height="12" rx="3" fill="#ef4444"/><rect x="46.5" y="29" width="7" height="12" rx="3" fill="#ef4444"/>`,
+    tophat: `<rect x="22" y="1" width="20" height="19" rx="2" fill="#111"/><rect x="15" y="18.5" width="34" height="4" rx="2" fill="#111"/><rect x="22" y="14" width="20" height="3.2" fill="#dc2626"/>`,
+    wizard: `<path d="M32 -1l13 23H19z" fill="#6d28d9"/><ellipse cx="32" cy="22" rx="19" ry="3.6" fill="#5b21b6"/><polygon points="${starPts(30, 11, 2.6)}" fill="#fde047"/><polygon points="${starPts(36, 17, 1.8)}" fill="#fde047"/>` }[a.hat] || "";
+  const bling = { earrings: `<circle cx="${earX}" cy="38.6" r="1.6" fill="#facc15"/><circle cx="${64 - earX}" cy="38.6" r="1.6" fill="#facc15"/>`,
+    nosering: `<circle cx="33.6" cy="37.6" r="1.6" fill="none" stroke="#facc15" stroke-width="1"/>`,
+    chain: `<path d="M23 52q9 7 18 0" fill="none" stroke="#facc15" stroke-width="1.6" stroke-dasharray="1.6 1"/><circle cx="32" cy="56.6" r="1.8" fill="#facc15"/>` }[a.extra] || "";
+  return `<svg viewBox="0 0 64 64" aria-hidden="true">${pattern}${back}<rect x="27" y="42" width="10" height="12" fill="${sk}"/>${shirt}${ears}${face}${onFace}${chin}${mouth}${tache}${eyes}${brows}${front}${glasses}${hat}${bling}</svg>`;
 }
-const randomAvatar = () => Object.fromEntries(Object.entries(S.me.avatar_parts || {}).map(([k, opts]) => [k, opts[Math.floor(Math.random() * opts.length)]]));
-const PART_LABEL = { face: "Face", skin: "Skin", hair: "Hair", hair_color: "Hair colour", eyes: "Eyes", mouth: "Mouth", extra: "Extra" };
+const OPTIONAL_PARTS = ["facial_hair", "glasses", "hat", "extra", "pattern"];
+const pickOne = (xs) => xs[Math.floor(Math.random() * xs.length)];
+const randomAvatar = () => Object.fromEntries(Object.entries(S.me.avatar_parts || {}).map(([k, opts]) =>
+  [k, OPTIONAL_PARTS.includes(k) && Math.random() < .55 ? "none" : pickOne(opts)]));
+const AV_TABS = [["face", "Face", ["face", "skin", "eyes", "brows", "mouth", "facial_hair", "extra"]], ["hair", "Hair & hats", ["hair", "hair_color", "hat"]],
+  ["style", "Style", ["glasses", "top", "top_color", "pattern", "bg"]], ["photo", "Photo", []]];
+const PART_LABEL = { face: "Face shape", skin: "Skin", hair: "Hair", hair_color: "Hair colour", brows: "Eyebrows", eyes: "Eyes", mouth: "Mouth",
+  facial_hair: "Facial hair", glasses: "Glasses", hat: "Hat", top: "Top", top_color: "Top colour", extra: "Extras", pattern: "Background pattern", bg: "Background colour" };
+const SWATCH_PARTS = ["skin", "hair_color", "top_color"];
+const photoURL = (name, v) => `/api/avatar/photo?${qs({ name, v })}`;
 
-// the avatar builder: tap a part, see it straight away; Save keeps it (and the colour behind it)
+// the avatar builder: the preview stays at the top while the parts scroll underneath
 function editAvatar(after) {
   const parts = S.me.avatar_parts || {};
-  let cur = { ...(S.me.avatar || avatarOf(S.me.who) || randomAvatar()) }, bg = S.me.color || (S.me.colors || [])[0];
+  let cur = { ...randomAvatar(), ...(avatarOf(S.me.who) || {}) }, bg = S.me.color || (S.me.colors || [])[0];
+  let tab = S.me.photo ? "photo" : "face", busy = false;
+  const scrim = document.createElement("div"); scrim.className = "scrim";
+  const m = document.createElement("div"); m.className = "modal card avmodal";
+  const close = () => { scrim.remove(); m.remove(); };
+  scrim.onclick = close;
+  const opt = (k, v) => SWATCH_PARTS.includes(k)
+    ? `<button class="swatch${cur[k] === v ? " on" : ""}" data-part="${k}" data-v="${v}" style="background:${v}" aria-label="${PART_LABEL[k]}"></button>`
+    : `<button class="avopt${cur[k] === v ? " on" : ""}" data-part="${k}" data-v="${v}" title="${esc(v)}"><span class="avatar art" style="background:${bg}">${avatarSVG({ ...cur, ...(k === "eyes" || k === "brows" ? { glasses: "none" } : {}), [k]: v })}</span></button>`;
+  const section = (k) => k === "bg"
+    ? `<div class="avsec"><div class="faint">${PART_LABEL.bg}</div><div class="swatches">${(S.me.colors || []).map((c) =>
+        `<button class="swatch${c === bg ? " on" : ""}" data-bg="${c}" style="background:${c}" aria-label="Background colour"></button>`).join("")}</div></div>`
+    : `<div class="avsec"><div class="faint">${PART_LABEL[k] || k}</div><div class="swatches">${(parts[k] || []).map((v) => opt(k, v)).join("")}</div></div>`;
+  const photoBody = () => `<div class="avsec"><p style="margin-top:0">Use a picture instead of a built avatar. It's cropped to a square and kept on ${S.me.local ? "this" : "the host's"} PC.</p>
+      <div class="row wrap" style="gap:8px"><button class="btn primary" id="avup" ${busy ? "disabled" : ""}>${busy ? "Uploading…" : S.me.photo ? "Upload a different photo" : "Upload a photo"}</button>
+        ${S.me.photo ? `<button class="btn" id="avphotox">Remove photo</button>` : ""}</div>
+      <input type="file" id="avfile" accept="image/*" hidden>
+      ${S.me.photo ? `<p class="faint">Your photo shows everywhere your avatar does. Pick a tab above and press Save to go back to a built avatar.</p>` : ""}</div>`;
+  const draw = () => {
+    const keep = $(".avbody", m) ? $(".avbody", m).scrollTop : 0, sameTab = m.dataset.tab === tab;
+    m.dataset.tab = tab;
+    const preview = tab === "photo"
+      ? (S.me.photo ? `<span class="avatar art"><img src="${photoURL(S.me.who, S.me.photo)}" alt=""></span>` : `<span class="avatar" style="background:${bg}">${esc(initials(S.me.who))}</span>`)
+      : `<span class="avatar art" style="background:${bg}">${avatarSVG(cur)}</span>`;
+    m.innerHTML = `<div class="avtop"><div class="row spread"><h2 style="margin:0">Your avatar</h2><button class="btn small" id="avx">Close</button></div>
+        <div class="avpreview">${preview}</div>
+        <div class="tabs avtabs">${AV_TABS.map(([k, l]) => `<button class="${tab === k ? "on" : ""}" data-avtab="${k}">${l}</button>`).join("")}</div></div>
+      <div class="avbody">${tab === "photo" ? photoBody() : AV_TABS.find(([k]) => k === tab)[2].map(section).join("")}</div>
+      <div class="avfoot">${tab === "photo" ? `<button class="btn primary" id="avdone">Done</button>` : `<button class="btn" id="avrand">Randomise</button>
+        ${avatarOf(S.me.who) || S.me.photo ? `<button class="btn" id="avnone">Initials</button>` : ""}<span class="grow"></span>
+        <button class="btn" id="avcancel">Cancel</button><button class="btn primary" id="avsave">Save</button>`}</div>`;
+    if (sameTab) $(".avbody", m).scrollTop = keep;
+    const on = (sel, fn) => { const el = $(sel, m); if (el) el.onclick = fn; };
+    on("#avx", close); on("#avcancel", close); on("#avdone", () => { close(); after && after(); });
+    on("#avrand", () => { cur = randomAvatar(); draw(); });
+    $$("[data-avtab]", m).forEach((b) => b.onclick = () => { tab = b.dataset.avtab; draw(); });
+    $$("[data-bg]", m).forEach((b) => b.onclick = () => { bg = b.dataset.bg; draw(); });
+    $$("[data-part]", m).forEach((b) => b.onclick = () => { cur[b.dataset.part] = b.dataset.v; draw(); });
+    const save = async (avatar) => {
+      try {
+        const body = { avatar, photo: null };
+        if (bg !== S.me.color) body.color = bg;
+        S.me = await post("/api/me", body);
+        await loadPeople(); close(); toast(avatar ? "Avatar saved" : "Back to your initials"); after && after();
+      } catch (e) { toast(e.message); }
+    };
+    on("#avsave", () => save(cur));
+    on("#avnone", () => save(null));
+    on("#avup", () => $("#avfile", m).click());
+    const file = $("#avfile", m);
+    if (file) file.onchange = async (e) => {
+      const f = e.target.files[0]; if (!f) return;
+      const fd = new FormData(); fd.append("file", f);
+      busy = true; draw();
+      try { S.me = await api("/api/me/photo", { method: "POST", body: fd }); await loadPeople(); toast("Photo saved"); }
+      catch (err) { toast(err.message); }
+      busy = false; draw();
+    };
+    on("#avphotox", async () => {
+      try { S.me = await post("/api/me", { photo: null }); await loadPeople(); toast("Photo removed"); draw(); } catch (e) { toast(e.message); }
+    });
+  };
+  draw();
+  document.body.append(scrim, m);
+}
+
+// ---------- band logos: a shape, an icon and the band's name, drawn here ----------
+let logoN = 0;
+const LOGO_FONTS = { block: ["Impact, 'Arial Black', 'Helvetica Neue', sans-serif", 400, true, 1], metal: ["'Old English Text MT', 'UnifrakturMaguntia', 'Times New Roman', serif", 700, false, 0],
+  serif: ["Georgia, 'Times New Roman', serif", 700, true, 2], script: ["'Brush Script MT', 'Segoe Script', 'Snell Roundhand', cursive", 700, false, 0],
+  mono: ["'Courier New', Courier, monospace", 700, true, 1], round: ["'Trebuchet MS', 'Arial Rounded MT Bold', 'Avenir Next', sans-serif", 700, false, 0],
+  stencil: ["Stencil, 'Stencil Std', Impact, sans-serif", 400, true, 3] };
+const LOGO_ICONS = {
+  lightning: (c) => `<path d="M28 0L6 28h14l-6 20 26-30H26l8-18z" fill="${c}"/>`,
+  guitar: (c, bg) => `<path d="M34 4l10 10-4 4-3-1-11 11c2 5 1 10-3 14-5 5-14 5-19 0s-5-14 0-19c4-4 9-5 14-3l11-11-1-3z" fill="${c}"/><circle cx="15" cy="33" r="4" fill="${bg}"/>`,
+  skull: (c, bg) => `<path d="M24 2C12 2 4 10 4 21c0 7 3 11 7 14v9h26v-9c4-3 7-7 7-14C44 10 36 2 24 2z" fill="${c}"/><circle cx="15" cy="22" r="5" fill="${bg}"/><circle cx="33" cy="22" r="5" fill="${bg}"/><path d="M24 28l-3 5h6zM18 38v6M24 38v6M30 38v6" fill="${bg}" stroke="${bg}" stroke-width="2"/>`,
+  flame: (c) => `<path d="M24 0c3 10 14 14 14 28 0 11-7 20-14 20S10 39 10 28c0-6 3-10 6-13 0 6 3 9 6 9-3-8 0-18 2-24z" fill="${c}"/>`,
+  star: (c) => `<polygon points="${starPts(24, 26, 25)}" fill="${c}"/>`,
+  crown: (c) => `<path d="M2 38L5 10l11 12 8-18 8 18 11-12 3 28z" fill="${c}"/><rect x="3" y="40" width="42" height="6" rx="2" fill="${c}"/>`,
+  wings: (c) => `<path d="M22 26C14 10 4 8-2 10c4 3 6 6 6 9-3 0-5 1-6 3 4 1 7 3 8 6-3 0-5 2-5 4 6 0 13-1 21-6z" fill="${c}"/><path d="M26 26c8-16 18-18 24-16-4 3-6 6-6 9 3 0 5 1 6 3-4 1-7 3-8 6 3 0 5 2 5 4-6 0-13-1-21-6z" fill="${c}"/><circle cx="24" cy="27" r="5" fill="${c}"/>`,
+  drums: (c, bg) => `<path d="M4 22v15c0 4 9 7 20 7s20-3 20-7V22" fill="${c}"/><ellipse cx="24" cy="22" rx="20" ry="7" fill="${c}" stroke="${bg}" stroke-width="2"/><path d="M6 2l18 18M42 2L24 20" stroke="${c}" stroke-width="3.5" stroke-linecap="round"/>`,
+  mic: (c) => `<rect x="16" y="0" width="16" height="27" rx="8" fill="${c}"/><path d="M9 20c0 9 7 15 15 15s15-6 15-15M24 35v9M15 46h18" fill="none" stroke="${c}" stroke-width="3.5" stroke-linecap="round"/>`,
+  note: (c) => `<path d="M16 7l28-7v35a7 6 0 1 1-4-5.5V9L20 14v26a7 6 0 1 1-4-5.5z" fill="${c}"/>`,
+  eye: (c, bg) => `<path d="M0 24C8 12 16 8 24 8s16 4 24 16c-8 12-16 16-24 16S8 36 0 24z" fill="${c}"/><circle cx="24" cy="24" r="9" fill="${bg}"/><circle cx="24" cy="24" r="4" fill="${c}"/>`,
+};
+const LOGO_SHAPES = {
+  circle: `<circle cx="80" cy="72" r="60"/>`, shield: `<path d="M80 10l56 17v36c0 36-25 61-56 75c-31-14-56-39-56-75V27z"/>`,
+  hexagon: `<polygon points="80,8 136,40 136,104 80,136 24,104 24,40"/>`, diamond: `<polygon points="80,4 148,72 80,140 12,72"/>`,
+  star: `<polygon points="${starPts(80, 78, 74, 5, .5)}"/>`, banner: `<path d="M8 26h144l-14 46 14 46H8l14-46z"/>`,
+  burst: `<polygon points="${starPts(80, 72, 70, 14, .8)}"/>`, none: "",
+};
+const hashOf = (s) => [...String(s)].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7);
+function defaultLogo(id) {  // every band has a logo; this one stands in until someone makes theirs
+  const P = S.me.logo_parts || {}, h = hashOf(id || "band"), at = (k, n) => (P[k] || [""])[(h >> n) % (P[k] || [""]).length];
+  return { shape: at("shape", 1) === "none" ? "circle" : at("shape", 1), icon: at("icon", 4) === "none" ? "lightning" : at("icon", 4), font: at("font", 8),
+    effect: "shadow", color1: at("color1", 11), color2: "#f8fafc", text_color: "#f8fafc" };
+}
+function logoSVG(b, logo) {
+  const L = logo || b.logo || defaultLogo(b.id), id = "lg" + (++logoN);
+  const [family, weight, upper, spacing] = LOGO_FONTS[L.font] || LOGO_FONTS.block;
+  const text = upper ? (b.name || "").toUpperCase() : (b.name || "");
+  // the name goes across the middle of the emblem: one line, or two for a long name (split near the middle)
+  let lines = [text];
+  if (text.length > 13 && text.includes(" ")) {
+    const gaps = [...text.matchAll(/ /g)].map((m) => m.index), mid = gaps.reduce((x, g) => (Math.abs(g - text.length / 2) < Math.abs(x - text.length / 2) ? g : x));
+    lines = [text.slice(0, mid), text.slice(mid + 1)];
+  }
+  const longest = Math.max(...lines.map((l) => l.length), 1), wide = upper ? .64 : .56;
+  const fs = Math.max(13, Math.min(lines.length > 1 ? 34 : 42, 150 / (longest * wide + longest * spacing / 30)));
+  const ys = lines.length > 1 ? [104 - fs * .55, 104 + fs * .55] : [104];
+  const dark = shade(L.color1, .4), shapeFill = L.effect === "gradient" ? `url(#${id}s)` : L.color1;
+  const shape = L.shape === "none" ? "" : LOGO_SHAPES[L.shape].replace("/>", ` fill="${shapeFill}" stroke="${dark}" stroke-width="4" stroke-linejoin="round"/>`);
+  const icon = L.icon === "none" ? "" : `<g transform="translate(80 ${L.shape === "banner" ? 48 : 46}) scale(.9) translate(-24 -24)" opacity="${text ? .95 : 1}">${LOGO_ICONS[L.icon](L.color2, L.shape === "none" ? "#0b0c18" : L.color1)}</g>`;
+  const t = (extra) => lines.map((l, i) => {
+    const fit = l.length * fs * wide + l.length * spacing > 150 ? ` textLength="150" lengthAdjust="spacingAndGlyphs"` : "";
+    return `<text x="80" y="${ys[i].toFixed(1)}" text-anchor="middle" dominant-baseline="central" font-family="${family}" font-weight="${weight}" font-size="${fs.toFixed(1)}" letter-spacing="${spacing}"${fit} ${extra}>${esc(l)}</text>`;
+  }).join("");
+  const words = { plain: t(`fill="${L.text_color}"`),
+    outline: t(`fill="${L.text_color}" stroke="#0b0c18" stroke-width="5" paint-order="stroke" stroke-linejoin="round"`),
+    shadow: t(`fill="#000" opacity=".6" transform="translate(3 3)"`) + t(`fill="${L.text_color}" stroke="#0b0c18" stroke-width="2" paint-order="stroke"`),
+    glow: t(`fill="${L.text_color}" filter="url(#${id}g)"`) + t(`fill="${L.text_color}" stroke="#0b0c18" stroke-width="1.5" paint-order="stroke"`),
+    gradient: t(`fill="url(#${id}t)" stroke="#0b0c18" stroke-width="3" paint-order="stroke"`) }[L.effect] || "";
+  return `<svg viewBox="0 0 160 160" aria-hidden="true"><defs>
+      <linearGradient id="${id}s" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${L.color1}"/><stop offset="1" stop-color="${dark}"/></linearGradient>
+      <linearGradient id="${id}t" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${L.text_color}"/><stop offset="1" stop-color="${L.color2}"/></linearGradient>
+      <filter id="${id}g" x="-20%" y="-50%" width="140%" height="200%"><feGaussianBlur stdDeviation="3.5"/></filter></defs>${shape}${icon}${words}</svg>`;
+}
+const LOGO_LABEL = { shape: "Shape", icon: "Icon", font: "Lettering", effect: "Letter effect", color1: "Shape colour", color2: "Icon colour", text_color: "Letter colour" };
+const randomLogo = () => Object.fromEntries(Object.entries(S.me.logo_parts || {}).map(([k, o]) => [k, pickOne(o)]));
+
+// the logo builder (any member): same layout as the avatar builder
+function editLogo(b, after) {
+  const parts = S.me.logo_parts || {};
+  let cur = { ...(b.logo || defaultLogo(b.id)) };
   const scrim = document.createElement("div"); scrim.className = "scrim";
   const m = document.createElement("div"); m.className = "modal card avmodal";
   const close = () => { scrim.remove(); m.remove(); };
   scrim.onclick = close;
   const draw = () => {
-    m.innerHTML = `<div class="row spread"><h2 style="margin:0">Your avatar</h2><button class="btn small" id="avx">Close</button></div>
-      <div class="avpreview"><span class="avatar art" style="background:${bg}">${avatarSVG(cur)}</span></div>
-      <div class="row" style="justify-content:center;gap:8px;margin-bottom:6px"><button class="btn small" id="avrand">Randomise</button>
-        ${avatarOf(S.me.who) ? `<button class="btn small" id="avnone">Use my initials</button>` : ""}</div>
-      <div class="avsec"><div class="faint">Background</div><div class="swatches">${(S.me.colors || []).map((c) =>
-        `<button class="swatch${c === bg ? " on" : ""}" data-bg="${c}" style="background:${c}" aria-label="Background colour"></button>`).join("")}</div></div>
-      ${Object.entries(parts).map(([k, opts]) => `<div class="avsec"><div class="faint">${PART_LABEL[k] || k}</div><div class="swatches">${opts.map((v) =>
-        k === "skin" || k === "hair_color"
-          ? `<button class="swatch${cur[k] === v ? " on" : ""}" data-part="${k}" data-v="${v}" style="background:${v}" aria-label="${PART_LABEL[k]}"></button>`
-          : `<button class="avopt${cur[k] === v ? " on" : ""}" data-part="${k}" data-v="${v}" title="${esc(v)}"><span class="avatar art" style="background:${bg}">${avatarSVG({ ...cur, [k]: v })}</span></button>`).join("")}</div></div>`).join("")}
-      <div class="row" style="margin-top:16px;justify-content:flex-end;gap:8px"><button class="btn" id="avcancel">Cancel</button><button class="btn primary" id="avsave">Save</button></div>`;
-    $("#avx", m).onclick = close; $("#avcancel", m).onclick = close;
-    $("#avrand", m).onclick = () => { cur = randomAvatar(); draw(); };
-    $$("[data-bg]", m).forEach((b) => b.onclick = () => { bg = b.dataset.bg; draw(); });
-    $$("[data-part]", m).forEach((b) => b.onclick = () => { cur[b.dataset.part] = b.dataset.v; draw(); });
-    const save = async (avatar) => {
-      try {
-        S.me = await post("/api/me", bg === S.me.color ? { avatar } : { avatar, color: bg });
-        await loadPeople(); close(); toast(avatar ? "Avatar saved" : "Back to your initials"); after && after();
-      } catch (e) { toast(e.message); }
-    };
-    $("#avsave", m).onclick = () => save(cur);
-    const none = $("#avnone", m); if (none) none.onclick = () => save(null);
+    const keep = $(".avbody", m) ? $(".avbody", m).scrollTop : 0;
+    m.innerHTML = `<div class="avtop"><div class="row spread"><h2 style="margin:0">${esc(b.name)} logo</h2><button class="btn small" id="lgx">Close</button></div>
+        <div class="avpreview"><span class="bandlogo huge">${logoSVG(b, cur)}</span></div></div>
+      <div class="avbody">${Object.entries(parts).map(([k, opts]) => `<div class="avsec"><div class="faint">${LOGO_LABEL[k] || k}</div><div class="swatches">${opts.map((v) =>
+        k.includes("color") ? `<button class="swatch${cur[k] === v ? " on" : ""}" data-lp="${k}" data-v="${v}" style="background:${v}" aria-label="${LOGO_LABEL[k]}"></button>`
+          : `<button class="logoopt${cur[k] === v ? " on" : ""}" data-lp="${k}" data-v="${v}" title="${esc(v)}"><span class="bandlogo">${logoSVG(b, { ...cur, [k]: v })}</span></button>`).join("")}</div></div>`).join("")}</div>
+      <div class="avfoot"><button class="btn" id="lgrand">Randomise</button>${b.logo ? `<button class="btn" id="lgreset">Default</button>` : ""}<span class="grow"></span>
+        <button class="btn" id="lgcancel">Cancel</button><button class="btn primary" id="lgsave">Save</button></div>`;
+    $(".avbody", m).scrollTop = keep;
+    $("#lgx", m).onclick = close; $("#lgcancel", m).onclick = close;
+    $("#lgrand", m).onclick = () => { cur = randomLogo(); draw(); };
+    $$("[data-lp]", m).forEach((x) => x.onclick = () => { cur[x.dataset.lp] = x.dataset.v; draw(); });
+    const save = async (logo) => { try { await bandOp(b.id, { op: "logo", logo }); close(); toast("Logo saved"); after && after(); } catch (e) { toast(e.message); } };
+    $("#lgsave", m).onclick = () => save(cur);
+    const r = $("#lgreset", m); if (r) r.onclick = () => save(null);
   };
   draw();
   document.body.append(scrim, m);
+}
+
+// ---------- random band names ----------
+const BN = {
+  adj: ["Electric", "Velvet", "Midnight", "Screaming", "Cosmic", "Neon", "Rusty", "Atomic", "Savage", "Silent", "Burning", "Frozen", "Hollow", "Golden",
+    "Feral", "Lunar", "Toxic", "Wild", "Broken", "Crimson", "Static", "Infinite", "Psychic", "Haunted", "Turbo", "Chrome", "Sonic", "Lucky", "Mighty",
+    "Dirty", "Rabid", "Analog", "Radioactive", "Sleepy", "Furious", "Glitter", "Iron", "Holographic", "Unstoppable", "Suspicious"],
+  plural: ["Wizards", "Raccoons", "Pickles", "Vipers", "Ghosts", "Wolves", "Robots", "Tacos", "Lizards", "Hornets", "Comets", "Bandits", "Goblins",
+    "Sharks", "Llamas", "Pirates", "Cassettes", "Thunderbirds", "Gremlins", "Unicorns", "Toasters", "Skeletons", "Moths", "Dragons", "Fuzzboxes",
+    "Crows", "Possums", "Astronauts", "Vampires", "Waffles", "Cowboys", "Ninjas", "Hamsters", "Mammoths", "Satellites"],
+  noun: ["Thunder", "Riot", "Mayhem", "Static", "Venom", "Chaos", "Echo", "Voltage", "Doom", "Fury", "Gravity", "Nebula", "Rumble", "Noise",
+    "Smoke", "Lava", "Fuzz", "Distortion", "Tornado", "Eclipse", "Feedback", "Overdrive", "Thunderclap", "Wreckage", "Moonlight", "Avalanche"],
+  place: ["Mars", "the Basement", "the Garage", "Nowhere", "Sector 7", "the Void", "Saturn", "the Swamp", "Planet X", "the Moon", "Area 51",
+    "the Abyss", "the Parking Lot", "Neptune", "the Upside Down", "Room 404"],
+};
+const BAND_FORMS = [(w) => `The ${w.adj} ${w.plural}`, (w) => `${w.adj} ${w.noun}`, (w) => `${w.noun} ${w.plural}`, (w) => `${w.plural} of ${w.place}`,
+  (w) => `${w.noun} from ${w.place}`, (w) => `${w.adj} ${w.plural}`, (w) => `The ${w.plural}`, (w) => `${w.noun} & the ${w.plural}`,
+  (w) => `Dr. ${w.noun} and the ${w.adj} ${w.plural}`, (w) => `${w.adj} ${w.noun} ${w.plural}`];
+const bandName = () => { let n; do { n = pickOne(BAND_FORMS)(Object.fromEntries(Object.entries(BN).map(([k, v]) => [k, pickOne(v)]))); } while (n.length > 40); return n; };
+const DICE = `<svg class="dice" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="4.5" fill="none" stroke="currentColor" stroke-width="2"/><g fill="currentColor"><circle cx="8.2" cy="8.2" r="1.6"/><circle cx="15.8" cy="8.2" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="8.2" cy="15.8" r="1.6"/><circle cx="15.8" cy="15.8" r="1.6"/></g></svg>`;
+
+// a small box for a name, with the dice for a random band name
+function askBandName(title, value = "") {
+  return new Promise((done) => {
+    const scrim = document.createElement("div"); scrim.className = "scrim pop";
+    const m = document.createElement("div"); m.className = "modal card pop";
+    m.innerHTML = `<h2 style="margin-top:0">${esc(title)}</h2>
+      <div class="row" style="gap:8px"><input id="bnin" class="grow" maxlength="40" value="${esc(value)}" placeholder="Band name"><button class="btn" id="bndice" title="Random band name" aria-label="Random band name">${DICE}</button></div>
+      <div class="row" style="margin-top:14px;justify-content:flex-end;gap:8px"><button class="btn" id="bnno">Cancel</button><button class="btn primary" id="bnok">Save</button></div>`;
+    document.body.append(scrim, m);
+    const inp = $("#bnin", m), finish = (v) => { scrim.remove(); m.remove(); done(v); };
+    inp.focus(); inp.select();
+    $("#bndice", m).onclick = () => { inp.value = bandName(); };
+    $("#bnno", m).onclick = () => finish(null); scrim.onclick = () => finish(null);
+    const ok = () => finish(inp.value.trim() || null);
+    $("#bnok", m).onclick = ok;
+    inp.onkeydown = (e) => { if (e.key === "Enter") ok(); };
+  });
 }
 
 // ---------- profiles ----------
@@ -1588,10 +1823,10 @@ async function renderProfile() {
         <div class="row wrap" style="gap:8px"><h2 style="margin:0">${esc(p.name)}</h2>${p.me ? `<span class="faint">(you)</span>` : ""}${p.owner ? `<span class="chip accent">Host</span>` : ""}</div>
         <div class="faint">${p.online ? "Here now" : p.last ? `Last here ${since(p.last)}` : "Not seen yet"}</div>
         <div class="stats"><span><b>${p.songs.length}</b> songs added</span><span><b>${p.hearts}</b> favourites</span><span><b>${p.bands.length}</b> ${p.bands.length === 1 ? "band" : "bands"}</span></div>
-        ${p.me ? `<div class="row wrap" style="gap:8px;margin-top:12px"><button class="btn small" id="profav">${p.avatar ? "Edit avatar" : "Make an avatar"}</button></div>` : ""}
+        ${p.me ? `<div class="row wrap" style="gap:8px;margin-top:12px"><button class="btn small" id="profav">${p.avatar || p.photo ? "Edit avatar" : "Make an avatar"}</button></div>` : ""}
       </div></div>
     <div class="card"><h2>Bands</h2>${p.bands.length ? `<div class="row wrap" style="gap:10px">${p.bands.map((b) =>
-      `<button class="bandchip" data-band="${esc(b.id)}"><b>${esc(b.name)}</b><span class="avstack">${b.members.slice(0, 5).map((m) => avatar(m, "", "", false)).join("")}</span></button>`).join("")}</div>`
+      `<button class="bandchip" data-band="${esc(b.id)}"><span class="bandlogo tiny">${logoSVG(b)}</span><b>${esc(b.name)}</b><span class="avstack">${b.members.slice(0, 5).map((m) => avatar(m, "", "", false)).join("")}</span></button>`).join("")}</div>`
       : `<div class="faint">${p.me ? "Not in a band yet." : `${esc(p.name)} isn't in a band yet.`} <a href="#party" id="tobands">${p.me ? "Start one in Party &rarr; Bands" : "See the bands"}</a></div>`}</div>
     <div class="card"><div class="row spread wrap" style="gap:10px;margin-bottom:6px"><h2 style="margin:0">Songs added</h2>
         <div class="tabs">${[["all", `All ${p.songs.length}`], ["quickplay", `Quickplay ${n("quickplay")}`], ["staging", `Staging ${n("staging")}`]].map(([k, l]) =>
@@ -1622,14 +1857,15 @@ const inBand = (b) => b.members.some((m) => pkey(m) === pkey(S.me.who));
 
 async function bandsHTML() {
   const list = await api("/api/bands");
-  return `${list.length ? `<div class="people">${list.map((b) => `<div class="card bandcard link" data-band="${esc(b.id)}">
-      <div class="row spread" style="gap:8px"><b class="ellipsis">${esc(b.name)}</b>${inBand(b) ? `<span class="chip green">You're in it</span>` : ""}</div>
-      <div class="avstack" style="margin:10px 0">${b.members.map((m) => avatar(m, "", "", false)).join("")}</div>
-      <div class="faint">${plural(b.members.length, "member")} · ${plural(b.setlists.length, "set list")} · ${plural(b.setlists.reduce((t, s) => t + s.n, 0), "song")}</div></div>`).join("")}</div>`
+  return `${list.length ? `<div class="people">${list.map((b) => `<div class="card bandcard link" data-band="${esc(b.id)}"><span class="bandlogo">${logoSVG(b)}</span>
+      <div class="grow" style="min-width:0"><div class="row spread" style="gap:8px"><b class="ellipsis">${esc(b.name)}</b>${inBand(b) ? `<span class="chip green">You're in it</span>` : ""}</div>
+      <div class="avstack" style="margin:8px 0">${b.members.map((m) => avatar(m, "", "", false)).join("")}</div>
+      <div class="faint">${plural(b.members.length, "member")} · ${plural(b.setlists.length, "set list")} · ${plural(b.setlists.reduce((t, s) => t + s.n, 0), "song")}</div></div></div>`).join("")}</div>`
     : `<div class="card empty">No bands yet. Start one below, then add your friends.</div>`}
     <div class="card"><h2>Start a band</h2>
-      <div class="row" style="gap:8px"><input id="bandname" class="grow" maxlength="40" placeholder="Band name"><button class="btn primary" id="bandnew">Start it</button></div>
-      <p class="faint" style="margin-bottom:0">You're its first member. Add people and build set lists on the band's page.</p></div>`;
+      <div class="row" style="gap:8px"><input id="bandname" class="grow" maxlength="40" placeholder="Band name">
+        <button class="btn" id="banddice" title="Random band name" aria-label="Random band name">${DICE}</button><button class="btn primary" id="bandnew">Start it</button></div>
+      <p class="faint" style="margin-bottom:0">Stuck for a name? Roll the dice. You're the first member; add people, a logo and set lists on the band's page.</p></div>`;
 }
 function wireBands(body) {
   const go = async () => {
@@ -1637,6 +1873,7 @@ function wireBands(body) {
     catch (e) { toast(e.message); }
   };
   $("#bandnew", body).onclick = go;
+  $("#banddice", body).onclick = () => { $("#bandname", body).value = bandName(); };
   $("#bandname", body).onkeydown = (e) => { if (e.key === "Enter") go(); };
 }
 
@@ -1652,6 +1889,10 @@ async function renderBand() {
   const sl = b.setlists.find((s) => s.id === bandSel);
   const others = (S.peopleList || []).filter((p) => !b.members.some((m) => pkey(m) === pkey(p.name)));
   page(esc(b.name), `Started by <b class="link" data-user="${esc(b.by)}">${esc(b.by)}</b> · ${plural(b.members.length, "member")}`, `
+    <div class="card bandhero"><span class="bandlogo big${edit ? " link" : ""}" ${edit ? `id="logoimg" title="Edit the logo"` : ""}>${logoSVG(b)}</span>
+      <div class="grow" style="min-width:0"><div class="stats" style="margin-top:0"><span><b>${b.members.length}</b> ${b.members.length === 1 ? "member" : "members"}</span>
+        <span><b>${b.setlists.length}</b> set ${b.setlists.length === 1 ? "list" : "lists"}</span><span><b>${b.setlists.reduce((t, s) => t + s.songs.length, 0)}</b> songs</span></div>
+        ${edit ? `<div class="row wrap" style="gap:8px;margin-top:12px"><button class="btn small" id="logoedit">${b.logo ? "Edit logo" : "Make a logo"}</button></div>` : ""}</div></div>
     <div class="card"><h2>Members</h2><div class="members">${b.members.map((m) => `<div class="member">${avatar(m, "", "big")}
         <div style="min-width:0"><b class="link ellipsis" data-user="${esc(m)}">${esc(m)}</b>${pkey(m) === pkey(b.by) ? `<div class="faint">Started it</div>` : ""}</div>
         ${lead && pkey(m) !== me ? `<button class="btn small danger" data-kick="${esc(m)}" aria-label="Take ${esc(m)} out of the band">&#10005;</button>` : ""}</div>`).join("")}</div>
@@ -1688,7 +1929,8 @@ async function renderBand() {
   on("#slnew", () => { const n = ask("Name the new set list", "Set " + (b.setlists.length + 1)); if (n) send({ op: "setlist_new", name: n }, (r) => { bandSel = r.setlists[r.setlists.length - 1].id; }); });
   on("#slren", () => { const n = ask("Rename the set list", sl.name); if (n) send({ op: "setlist_rename", setlist: bandSel, name: n }); });
   on("#sldel", () => { if (confirm(`Delete the set list “${sl.name}”?`)) send({ op: "setlist_delete", setlist: bandSel }); });
-  on("#bren", () => { const n = ask("Rename the band", b.name); if (n) send({ op: "rename", name: n }); });
+  on("#bren", async () => { const n = await askBandName("Rename the band", b.name); if (n && n !== b.name) send({ op: "rename", name: n }); });
+  on("#logoedit", () => editLogo(b, renderBand)); on("#logoimg", () => editLogo(b, renderBand));
   on("#bdel", () => { if (confirm(`Delete ${b.name} and all its set lists?`)) send({ op: "delete" }); });
   on("#bleave", () => { if (confirm(`Leave ${b.name}?`)) send({ op: "leave" }, () => toast(`You left ${b.name}`)); });
 

@@ -401,27 +401,26 @@ def me(request: Request):
     name = who(request) if d is None or d.get("name") else ""
     return {"local": d is None, "owner": is_owner(request), "name": cfg.get("charter", "") if d is None else d.get("name", ""),
             "who": name, "color": social.color_of(name) if name else "", "colors": social.COLORS,
-            "avatar": social.avatar_of(name) if name else None, "avatar_parts": social.AVATAR_PARTS}
+            "avatar": social.avatar_of(name) if name else None, "avatar_parts": social.AVATAR_PARTS,
+            "photo": social.photo_of(name) if name else 0, "logo_parts": social.LOGO_PARTS}
 
 
 @app.post("/api/me")
 async def set_me(request: Request):
     d = device_of(request)
     b = await request.json()
-    if "color" in b:  # a person's colour in the feed and on their songs
-        try:
+    try:
+        if "color" in b:  # a person's colour in the feed and on their songs
             social.set_color(who(request), str(b["color"]))
-        except ValueError as e:
-            raise HTTPException(400, str(e))
-        if "name" not in b and "avatar" not in b:
-            return me(request)
-    if "avatar" in b:  # built on their profile page; null goes back to initials
-        try:
+        if "avatar" in b:  # built on their profile page; null goes back to initials
             social.set_avatar(who(request), b["avatar"])
-        except ValueError as e:
-            raise HTTPException(400, str(e))
-        if "name" not in b:
-            return me(request)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    if "photo" in b and not b["photo"]:  # back to the built avatar (or initials)
+        photo_path(who(request)).unlink(missing_ok=True)
+        social.set_photo(who(request), 0)
+    if "name" not in b and any(k in b for k in ("color", "avatar", "photo")):
+        return me(request)
     if d is None:
         raise HTTPException(400, "This PC is the owner's")
     name = " ".join(str(b.get("name", "")).split())[:40]
@@ -442,6 +441,51 @@ async def set_me(request: Request):
             request.state.device = devices()[known]
         save_config(cfg)
     return me(request)
+
+
+# ---------- profile photos: kept on this PC, small and square ----------
+PHOTOS = Path.home() / ".rockwizard_avatars"
+PHOTO_MAX_BYTES = 25 * 1024 * 1024
+PHOTO_SIZE = 320
+
+
+def photo_path(name: str) -> Path:
+    import hashlib
+    return PHOTOS / (hashlib.sha1(social.key_of(name).encode()).hexdigest()[:16] + ".jpg")
+
+
+@app.post("/api/me/photo")
+async def set_photo(request: Request, file: UploadFile = File(...)):
+    """Use a picture as this person's avatar: cropped to a square, made small, stored here."""
+    name = who(request)
+    if device_of(request) is not None and not device_of(request).get("name"):
+        raise HTTPException(400, "Tell RockWizard your name first")
+    data = await file.read(PHOTO_MAX_BYTES + 1)
+    if len(data) > PHOTO_MAX_BYTES:
+        raise HTTPException(413, "That picture is too big (25 MB at most)")
+    try:
+        import io
+        from PIL import Image, ImageOps
+        img = Image.open(io.BytesIO(data))
+        if img.width * img.height > 60_000_000:
+            raise ValueError("too many pixels")
+        img = ImageOps.exif_transpose(img).convert("RGB")
+        img = ImageOps.fit(img, (PHOTO_SIZE, PHOTO_SIZE), Image.LANCZOS)
+        PHOTOS.mkdir(parents=True, exist_ok=True)
+        img.save(photo_path(name), "JPEG", quality=88)
+    except Exception as e:
+        raise HTTPException(400, f"That file isn't a picture RockWizard can read ({e.__class__.__name__}). "
+                                 "Try a JPG or PNG.")
+    social.set_photo(name, int(time.time() * 1000))
+    return me(request)
+
+
+@app.get("/api/avatar/photo")
+def avatar_photo(name: str):
+    f = photo_path(name)
+    if not social.photo_of(name) or not f.exists():
+        raise HTTPException(404)
+    return FileResponse(f, media_type="image/jpeg", headers={"Cache-Control": "max-age=604800"})
 
 
 @app.get("/api/devices")
@@ -1414,7 +1458,7 @@ def people(request: Request):
         out.append(r | {"color": social.color_of(r["name"]), "online": now - r["last"] < 150, "me": k == me_key,
                         "added": a["n"], "top_artist": top[0], "top_count": top[1],
                         "hearts": len(social.hearts_of(r["name"])), "shame": social.shame_of(r["name"]),
-                        "avatar": social.avatar_of(r["name"])})
+                        "avatar": social.avatar_of(r["name"]), "photo": social.photo_of(r["name"])})
     return sorted(out, key=lambda r: (-r["added"], r["name"].lower()))
 
 
@@ -1427,11 +1471,12 @@ def profile(name: str, request: Request):
     if p is None and songs:  # a name on songs from before devices were tracked
         n = songs[0]["added_by"]
         p = {"name": n, "owner": False, "last": 0, "online": False, "me": False, "added": len(songs),
-             "color": social.color_of(n), "avatar": social.avatar_of(n), "hearts": len(social.hearts_of(n)),
+             "color": social.color_of(n), "avatar": social.avatar_of(n), "photo": social.photo_of(n),
+             "hearts": len(social.hearts_of(n)),
              "shame": social.shame_of(n)}
     if p is None:
         raise HTTPException(404, f"Nobody called {name} has been here")
-    mine = [{"id": b["id"], "name": b["name"], "members": b["members"]}
+    mine = [{"id": b["id"], "name": b["name"], "members": b["members"], "logo": b.get("logo")}
             for b in social.bands() if social.is_member(b, p["name"])]
     return p | {"songs": songs, "bands": mine}
 
@@ -1504,7 +1549,7 @@ async def band_change(bid: str, req: Request):
         raise HTTPException(404, str(e.args[0]))
     member = social.is_member(band, name)
     lead = is_owner(req) or social.key_of(band["by"]) == social.key_of(name)
-    args = {k: b[k] for k in ("name", "setlist", "index", "step") if k in b}
+    args = {k: b[k] for k in ("name", "setlist", "index", "step", "logo") if k in b}
     if op == "leave":
         if not member:
             raise HTTPException(400, "You're not in this band")

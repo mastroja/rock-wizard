@@ -106,21 +106,53 @@ def set_color(name: str, color: str) -> str:
 
 
 # An avatar is a choice from each list (the web app draws it; the background is the person's colour).
+# The first choice is what an avatar saved before that part existed gets.
 AVATAR_PARTS = {
-    "face": ["round", "square", "long"],
-    "skin": ["#f9d7b9", "#eec09a", "#d9a074", "#b9784d", "#8d5a3b", "#5e3b28", "#9ae6b4", "#a5b4fc"],
-    "hair": ["none", "short", "long", "spiky", "mohawk", "curly", "bun"],
-    "hair_color": ["#1f1a17", "#5b3a22", "#a0662f", "#e8c26b", "#d9d4cf", "#c0392b", "#ec4899", "#3b82f6", "#10b981"],
-    "eyes": ["dots", "happy", "wink", "big", "sleepy"],
-    "mouth": ["smile", "grin", "open", "flat", "tongue"],
-    "extra": ["none", "shades", "headphones", "headband", "crown", "beanie"],
+    "face": ["round", "square", "long", "oval", "wide"],
+    "skin": ["#f9d7b9", "#ffe0bd", "#eec09a", "#d9a074", "#c68642", "#b9784d", "#8d5a3b", "#5e3b28", "#3d2516",
+             "#9ae6b4", "#a5b4fc", "#c4b5fd", "#93c5fd", "#fca5a5"],
+    "hair": ["none", "short", "buzz", "long", "spiky", "mohawk", "curly", "afro", "bun", "ponytail", "pigtails",
+             "side", "emo", "dreads"],
+    "hair_color": ["#1f1a17", "#5b3a22", "#a0662f", "#e8c26b", "#d9d4cf", "#ffffff", "#64748b", "#c0392b", "#f97316",
+                   "#ec4899", "#7c3aed", "#3b82f6", "#10b981"],
+    "brows": ["none", "flat", "raised", "angry", "thick"],
+    "eyes": ["dots", "happy", "wink", "big", "sleepy", "stars", "hearts", "angry", "lashes", "dizzy"],
+    "mouth": ["smile", "grin", "open", "flat", "tongue", "teeth", "smirk", "o", "fangs", "sad"],
+    "facial_hair": ["none", "stubble", "moustache", "goatee", "beard"],
+    "glasses": ["none", "shades", "round", "stars", "hearts", "visor", "eyepatch"],
+    "hat": ["none", "beanie", "cap", "cowboy", "crown", "horns", "halo", "headband", "headphones", "tophat", "wizard"],
+    "top": ["tee", "hoodie", "jacket", "tank", "bandtee", "collar"],
+    "top_color": ["#1f2937", "#f8fafc", "#ef4444", "#f97316", "#facc15", "#22c55e", "#3b82f6", "#8b5cf6", "#ec4899",
+                  "#78350f"],
+    "extra": ["none", "earrings", "nosering", "chain", "freckles", "blush", "facepaint", "scar"],
+    "pattern": ["none", "rays", "dots", "stripes", "stars"],
 }
+_OLD_EXTRA = {"shades": ("glasses", "shades"), "headphones": ("hat", "headphones"), "headband": ("hat", "headband"),
+              "crown": ("hat", "crown"), "beanie": ("hat", "beanie")}
+
+
+def _avatar_clean(a: dict) -> dict:
+    """Every part filled in and known; an avatar from before glasses and hats had their own lists
+    keeps what it wore."""
+    a = dict(a)
+    if a.get("extra") in _OLD_EXTRA:
+        k, v = _OLD_EXTRA[a.pop("extra")]
+        a.setdefault(k, v)
+    out = {k: str(a.get(k, opts[0])) for k, opts in AVATAR_PARTS.items()}
+    if any(v not in AVATAR_PARTS[k] for k, v in out.items()):
+        raise ValueError("unknown avatar part")
+    return out
 
 
 def avatar_of(name: str) -> dict | None:
     with _lock:
         a = (_d()["profiles"].get(key_of(name)) or {}).get("avatar")
-    return dict(a) if a else None
+    if not a:
+        return None
+    try:
+        return _avatar_clean(a)
+    except ValueError:
+        return None
 
 
 def set_avatar(name: str, avatar: dict | None) -> dict | None:
@@ -128,9 +160,7 @@ def set_avatar(name: str, avatar: dict | None) -> dict | None:
     if avatar is not None:
         if not isinstance(avatar, dict):
             raise ValueError("unknown avatar")
-        avatar = {k: str(avatar.get(k, opts[0])) for k, opts in AVATAR_PARTS.items()}
-        if any(v not in AVATAR_PARTS[k] for k, v in avatar.items()):
-            raise ValueError("unknown avatar part")
+        avatar = _avatar_clean(avatar)
     with _lock:
         prof = _d()["profiles"].setdefault(key_of(name), {})
         if avatar is None:
@@ -139,6 +169,22 @@ def set_avatar(name: str, avatar: dict | None) -> dict | None:
             prof["avatar"] = avatar
         _save()
     return avatar
+
+
+def photo_of(name: str) -> int:
+    """When this person's uploaded photo was saved (0: none). The photo itself is a file (server.py)."""
+    with _lock:
+        return int((_d()["profiles"].get(key_of(name)) or {}).get("photo") or 0)
+
+
+def set_photo(name: str, version: int) -> None:
+    with _lock:
+        prof = _d()["profiles"].setdefault(key_of(name), {})
+        if version:
+            prof["photo"] = int(version)
+        else:
+            prof.pop("photo", None)
+        _save()
 
 
 def shame(name: str, event: str) -> dict:
@@ -238,7 +284,28 @@ def setlist_clear(played_only: bool = False) -> None:
 
 
 # ---------- bands ----------
-# {id: {"id", "name", "by" (who started it), "members": [names], "t",
+# A band's logo, like an avatar, is a choice from each list (the web app draws it with the band's name).
+LOGO_COLORS = ["#ef4444", "#f97316", "#facc15", "#22c55e", "#14b8a6", "#3b82f6", "#8b5cf6", "#ec4899", "#f8fafc",
+               "#9ca3af", "#111827", "#78350f"]
+LOGO_PARTS = {
+    "shape": ["circle", "shield", "hexagon", "diamond", "star", "banner", "burst", "none"],
+    "icon": ["lightning", "guitar", "skull", "flame", "star", "crown", "wings", "drums", "mic", "note", "eye", "none"],
+    "font": ["block", "metal", "serif", "script", "mono", "round", "stencil"],
+    "effect": ["plain", "outline", "shadow", "glow", "gradient"],
+    "color1": LOGO_COLORS, "color2": LOGO_COLORS, "text_color": LOGO_COLORS,
+}
+
+
+def _logo_clean(logo) -> dict:
+    if not isinstance(logo, dict):
+        raise ValueError("unknown logo")
+    out = {k: str(logo.get(k, opts[0])) for k, opts in LOGO_PARTS.items()}
+    if any(v not in LOGO_PARTS[k] for k, v in out.items()):
+        raise ValueError("unknown logo part")
+    return out
+
+
+# {id: {"id", "name", "by" (who started it), "members": [names], "t", "logo": {...} or absent,
 #       "setlists": [{"id", "name", "songs": [{"key", "folder", "title", "artist"}]}]}}
 # Songs are found again by key, so a song that moved from staging to Quickplay stays on the list.
 def _band(bid: str) -> dict:
@@ -294,6 +361,11 @@ def band_edit(bid: str, op: str, **a) -> None:
             b["name"] = _clean(a["name"], "band")
         elif op == "delete":
             del _d()["bands"][bid]
+        elif op == "logo":
+            if a.get("logo") is None:
+                b.pop("logo", None)
+            else:
+                b["logo"] = _logo_clean(a["logo"])
         elif op == "add_member":
             if is_member(b, a["name"]):
                 raise ValueError(f"{a['name']} is already in {b['name']}")
