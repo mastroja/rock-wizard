@@ -653,6 +653,18 @@ details.fold summary .bandlogo.tiny { margin-right: 4px; }
 .winner { display: flex; gap: 18px; align-items: center; border-color: #facc15; background: linear-gradient(180deg, rgba(250, 204, 21, .12), transparent 70%), var(--surface); }
 .poster { display: grid; place-items: center; padding: 10px 0; }
 .poster svg { width: 100%; max-width: 420px; height: auto; border-radius: 10px; box-shadow: 0 10px 40px rgba(0, 0, 0, .5); }
+.postmodal .poster { padding: 10px 0 0; }
+.postmodal .poster svg { width: auto; max-width: 100%; max-height: 42dvh; }
+.pstyles { display: flex; flex-wrap: wrap; gap: 8px; }
+.pstyle { display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--border); background: var(--bg2); color: var(--text);
+  border-radius: 99px; padding: 5px 12px 5px 5px; cursor: pointer; font: inherit; font-weight: 600; }
+.pstyle span { width: 24px; height: 24px; border-radius: 50%; border: 1px solid rgba(255, 255, 255, .25); }
+.pstyle.on { border-color: var(--accent); background: rgba(139, 92, 255, .16); }
+.pfield { display: flex; flex-direction: column; gap: 3px; margin-bottom: 8px; }
+.pfield .faint { margin: 0 !important; font-size: 12px; }
+.pfield input { background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; font: inherit; }
+.pchecks { display: grid; gap: 6px; }
+.pcheck { display: flex; align-items: center; gap: 8px; cursor: pointer; }
 @media (max-width: 760px) {
   .livegig, .winner { flex-direction: column; text-align: center; }
   .bandcard { flex-wrap: wrap; }

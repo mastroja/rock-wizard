@@ -2303,53 +2303,219 @@ async function renderGig() {
   on("#poster", () => showPoster(g));
 }
 
-// ---------- tour poster: the lineup with every band's logo, saved as a picture ----------
+// ---------- tour poster: the lineup with every band's logo, in a few styles, saved as a picture ----------
 const toDataURL = async (url) => { const b = await (await fetch(url)).blob(); return await new Promise((r) => { const f = new FileReader(); f.onload = () => r(f.result); f.readAsDataURL(b); }); };
-async function posterSVG(g) {
-  const W = 600, H = 900, n = g.lineup.length || 1, top = 300, slot = Math.min(150, (H - top - 90) / n), size = Math.min(120, slot - 16);
-  const when = new Date((g.started || g.t) * 1000).toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" });
-  const rows = await Promise.all(g.lineup.map(async (x, i) => {
-    const y = top + Math.max(0, (H - 90 - top - n * slot) / 2) + i * slot, art = x.image
-      ? `<image href="${await toDataURL(`/api/bands/${encodeURIComponent(x.band)}/image?v=${x.image}`)}" x="40" y="${y}" width="${size}" height="${size}" preserveAspectRatio="xMidYMid meet"/>`
-      : logoSVG(gigBand(x)).replace('<svg viewBox="0 0 160 160"', `<svg x="40" y="${y}" width="${size}" height="${size}" viewBox="0 0 160 160"`);
-    const big = i === 0 ? 40 : 30;
-    return `${art}<text x="${60 + size}" y="${y + size / 2 - 6}" font-family="Impact, 'Arial Black', sans-serif" font-size="${big}" fill="#fff" dominant-baseline="central"${x.name.length * big * .55 > 480 - size ? ` textLength="${480 - size}" lengthAdjust="spacingAndGlyphs"` : ""}>${esc(x.name.toUpperCase())}</text>
-      <text x="${60 + size}" y="${y + size / 2 + 30}" font-family="system-ui, sans-serif" font-size="16" fill="#c4b5fd">${esc(x.setlist_name || "")}${x.songs.length ? ` · ${x.songs.length} songs` : ""}${x.length ? ` · ${fmtLen(x.length)}` : ""}</text>`;
-  }));
-  const title = g.name.toUpperCase(), tfs = Math.min(72, 1000 / Math.max(title.length, 1));
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}"><defs>
-      <linearGradient id="pbg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1e1048"/><stop offset=".6" stop-color="#0c0d1a"/><stop offset="1" stop-color="#3b0a2a"/></linearGradient>
-      <linearGradient id="ptx" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fde047"/><stop offset="1" stop-color="#f97316"/></linearGradient></defs>
-    <rect width="${W}" height="${H}" fill="url(#pbg)"/>
-    ${Array.from({ length: 18 }, (_, i) => { const a1 = i * Math.PI / 9, a2 = a1 + Math.PI / 18, p = (t) => `${(300 + 700 * Math.cos(t)).toFixed(0)},${(130 + 700 * Math.sin(t)).toFixed(0)}`; return `<polygon points="300,130 ${p(a1)} ${p(a2)}" fill="#8b5cf6" opacity=".08"/>`; }).join("")}
-    <text x="300" y="70" text-anchor="middle" font-family="system-ui, sans-serif" font-size="20" letter-spacing="6" fill="#c4b5fd">ROCKWIZARD PRESENTS</text>
-    <text x="300" y="${150}" text-anchor="middle" font-family="Impact, 'Arial Black', sans-serif" font-size="${tfs.toFixed(0)}" fill="url(#ptx)" stroke="#0b0c18" stroke-width="3" paint-order="stroke" dominant-baseline="central"${title.length * tfs * .55 > 540 ? ` textLength="540" lengthAdjust="spacingAndGlyphs"` : ""}>${esc(title)}</text>
-    <text x="300" y="220" text-anchor="middle" font-family="system-ui, sans-serif" font-size="22" fill="#fff">${esc(when)}</text>
-    <rect x="40" y="252" width="520" height="3" fill="#8b5cf6"/>
-    ${rows.join("")}
-    <text x="300" y="${H - 40}" text-anchor="middle" font-family="system-ui, sans-serif" font-size="18" letter-spacing="3" fill="#c4b5fd">${g.lineup.length > 1 ? "BATTLE OF THE BANDS · VOTE IN ROCKWIZARD" : "LIVE IN CLONE HERO"}</text></svg>`;
+const posterImgs = new Map();  // band picture url -> data url, so redrawing while picking options is quick
+const posterImg = async (url) => { if (!posterImgs.has(url)) posterImgs.set(url, await toDataURL(url)); return posterImgs.get(url); };
+function prand(seed) {  // the same "random" decorations every time for one gig
+  let a = 0; for (const c of String(seed)) a = (a * 31 + c.charCodeAt(0)) | 0;
+  return () => { a = (a + 0x6D2B79F5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
 }
+let measurer;  // text widths measured in the real font, so long names are squeezed to fit rather than cut off
+const textW = (s, fs, font, f = {}) => { measurer = measurer || document.createElement("canvas").getContext("2d");
+  measurer.font = `${f.italic ? "italic " : ""}${f.weight || "normal"} ${fs}px ${font}`; return measurer.measureText(String(s)).width + (f.ls || 0) * String(s).length; };
+const fitAttr = (s, fs, max, font, f) => textW(s, fs, font, f) > max ? ` textLength="${max.toFixed(0)}" lengthAdjust="spacingAndGlyphs"` : "";
+const IMPACT = "Impact, 'Arial Black', sans-serif";
+// a plain one-line title; styles may draw their own (stacked words, ransom-note letters)
+const plainTitle = (o) => (t, x, y, fs, w, anchor) => {  // one line, or two when a long name would get too small
+  const fit = (str) => Math.min(fs, fs * w / textW(str, fs, o.font, o));
+  let lines = [t], f = fit(t);
+  const words = t.split(/\s+/);
+  if (f < fs * .7 && words.length > 1) {
+    let best;
+    for (let k = 1; k < words.length; k++) { const two = [words.slice(0, k).join(" "), words.slice(k).join(" ")], f2 = Math.min(...two.map(fit)); if (!best || f2 > best[1]) best = [two, f2]; }
+    if (best[1] > f) [lines, f] = best;
+  }
+  return { h: lines.length * f * 1.08 + f * .07, svg: lines.map((l, k) => `<text x="${x}" y="${(y + f * .58 + k * f * 1.08).toFixed(0)}" text-anchor="${anchor}" dominant-baseline="central" font-family="${o.font}" font-size="${f.toFixed(0)}"
+  ${o.weight ? `font-weight="${o.weight}"` : ""} ${o.italic ? `font-style="italic"` : ""} fill="${o.fill}" ${o.stroke ? `stroke="${o.stroke}" stroke-width="${o.sw || 3}" paint-order="stroke"` : ""} ${o.filter ? `filter="${o.filter}"` : ""}${fitAttr(l, f, w, o.font, o)}>${esc(l)}</text>`).join("") };
+};
+
+const POSTER_STYLES = {
+  arena: { label: "Arena", swatch: "linear-gradient(#1e1048, #3b0a2a)", head: IMPACT, body: "system-ui, sans-serif", text: "#fff", sub: "#c4b5fd", accent: "#8b5cf6",
+    bg: (W, H) => `<defs><linearGradient id="pbg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1e1048"/><stop offset=".6" stop-color="#0c0d1a"/><stop offset="1" stop-color="#3b0a2a"/></linearGradient>
+      <linearGradient id="ptx" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fde047"/><stop offset="1" stop-color="#f97316"/></linearGradient></defs>
+      <rect width="${W}" height="${H}" fill="url(#pbg)"/>
+      ${Array.from({ length: 18 }, (_, i) => { const a1 = i * Math.PI / 9, a2 = a1 + Math.PI / 18, p = (t) => `${(W / 2 + 1400 * Math.cos(t)).toFixed(0)},${(130 + 1400 * Math.sin(t)).toFixed(0)}`; return `<polygon points="${W / 2},130 ${p(a1)} ${p(a2)}" fill="#8b5cf6" opacity=".08"/>`; }).join("")}`,
+    title: plainTitle({ font: IMPACT, fill: "url(#ptx)", stroke: "#0b0c18" }) },
+
+  neon: { label: "Neon", swatch: "linear-gradient(#07021a, #ff2bd6)", head: "'Trebuchet MS', 'Arial Black', sans-serif", body: "'Trebuchet MS', sans-serif", text: "#fff", sub: "#22d3ee", accent: "#ff2bd6",
+    nameFilter: "url(#glow2)",
+    bg: (W, H, rnd) => { const hz = H * .58; return `<defs><linearGradient id="pbg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#07021a"/><stop offset=".58" stop-color="#1a0433"/><stop offset="1" stop-color="#2a0640"/></linearGradient>
+        <filter id="glow" x="-20%" y="-50%" width="140%" height="200%"><feGaussianBlur stdDeviation="5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+        <filter id="glow2" x="-10%" y="-50%" width="120%" height="200%"><feGaussianBlur stdDeviation="2.5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>
+      <rect width="${W}" height="${H}" fill="url(#pbg)"/>
+      ${Array.from({ length: 70 }, () => `<circle cx="${(rnd() * W).toFixed(0)}" cy="${(rnd() * hz).toFixed(0)}" r="${(rnd() * 1.4 + .3).toFixed(1)}" fill="#fff" opacity="${(rnd() * .6 + .2).toFixed(2)}"/>`).join("")}
+      <clipPath id="nsun"><rect width="${W}" height="${hz}"/></clipPath><circle cx="${W / 2}" cy="${hz}" r="${W * .28}" fill="#ff2bd6" opacity=".18" clip-path="url(#nsun)"/>
+      <g stroke="#ff2bd6" stroke-width="1.5" opacity=".35">${Array.from({ length: 21 }, (_, i) => `<line x1="${W / 2}" y1="${hz}" x2="${(W / 2 + (i - 10) * W * .25).toFixed(0)}" y2="${H}"/>`).join("")}
+        ${Array.from({ length: 9 }, (_, i) => { const y = hz + (H - hz) * Math.pow(i / 8, 1.8); return `<line x1="0" y1="${y.toFixed(0)}" x2="${W}" y2="${y.toFixed(0)}"/>`; }).join("")}</g>
+      <rect x="10" y="10" width="${W - 20}" height="${H - 20}" rx="18" fill="none" stroke="#22d3ee" stroke-width="2" opacity=".6" filter="url(#glow2)"/>`; },
+    title: plainTitle({ font: "'Trebuchet MS', 'Arial Black', sans-serif", weight: 900, italic: true, fill: "#fff", stroke: "#ff2bd6", sw: 4, filter: "url(#glow)" }) },
+
+  punk: { label: "Punk", swatch: "linear-gradient(135deg, #efeadf 60%, #ff2e88 60%)", head: "'Arial Black', Impact, sans-serif", body: "'Courier New', monospace", text: "#111", sub: "#d6246e", accent: "#111",
+    bg: (W, H, rnd) => `<rect width="${W}" height="${H}" fill="#efeadf"/>
+      ${Array.from({ length: 260 }, () => `<rect x="${(rnd() * W).toFixed(0)}" y="${(rnd() * H).toFixed(0)}" width="${(rnd() * 3 + 1).toFixed(1)}" height="${(rnd() * 3 + 1).toFixed(1)}" fill="#000" opacity="${(rnd() * .25 + .05).toFixed(2)}"/>`).join("")}
+      ${Array.from({ length: 5 }, () => `<rect x="-20" y="${(rnd() * H).toFixed(0)}" width="${W + 40}" height="${(rnd() * 14 + 2).toFixed(0)}" fill="#000" opacity=".05"/>`).join("")}
+      <rect x="-30" y="${H - 120}" width="${W * .7}" height="34" fill="#ff2e88" opacity=".85" transform="rotate(-4 0 ${H - 120})"/>
+      ${[[18, 18, -35], [W - 18, 18, 35], [18, H - 18, 35], [W - 18, H - 18, -35]].map(([x, y, r]) => `<rect x="${x - 45}" y="${y - 13}" width="90" height="26" fill="#f5e7a1" opacity=".75" transform="rotate(${r} ${x} ${y})"/>`).join("")}`,
+    title: (t, x, y, fs, w, anchor, rnd) => {  // ransom note: every letter cut from a different magazine
+      const fonts = ["Impact", "Georgia", "'Courier New'", "'Arial Black'", "'Times New Roman'", "'Trebuchet MS'"];
+      const looks = [["#111", "#fff"], ["#ff2e88", "#111"], ["#fff", "#111"], ["#facc15", "#111"], ["#111", "#ff2e88"]];
+      const words = t.split(/\s+/), lines = [];  // up to two lines
+      if (t.length > 12 && words.length > 1) { let a = "", b = words.slice(); while (b.length > 1 && (a + " " + b[0]).trim().length <= t.length / 2 + 2) a = (a + " " + b.shift()).trim(); lines.push(a, b.join(" ")); } else lines.push(t);
+      const longest = Math.max(...lines.map((l) => l.length)), f = Math.min(fs * 1.05, w / (longest * .78)), cw = f * .78;
+      let svg = "";
+      lines.forEach((l, li) => {
+        const x0 = anchor === "middle" ? x - l.length * cw / 2 : x;
+        [...l].forEach((ch, i) => {
+          if (ch === " ") return;
+          const [bgc, fg] = looks[Math.floor(rnd() * looks.length)], r = ((rnd() - .5) * 14).toFixed(1), cx = x0 + i * cw + cw / 2, cy = y + li * f * 1.1 + f * .55;
+          svg += `<g transform="rotate(${r} ${cx.toFixed(0)} ${cy.toFixed(0)})"><rect x="${(cx - cw * .47).toFixed(0)}" y="${(cy - f * .52).toFixed(0)}" width="${(cw * .94).toFixed(0)}" height="${(f * 1.04).toFixed(0)}" fill="${bgc}" ${bgc === "#fff" ? `stroke="#111" stroke-width="1.5"` : ""}/>
+            <text x="${cx.toFixed(0)}" y="${cy.toFixed(0)}" text-anchor="middle" dominant-baseline="central" font-family="${fonts[Math.floor(rnd() * fonts.length)]}" font-weight="700" font-size="${(f * (.72 + rnd() * .14)).toFixed(0)}" fill="${fg}">${esc(ch.toUpperCase())}</text></g>`;
+        });
+      });
+      return { h: lines.length * f * 1.1, svg };
+    } },
+
+  retro: { label: "70s", swatch: "linear-gradient(#f3e3c3 50%, #e85d04 50%)", head: "Georgia, 'Times New Roman', serif", body: "Georgia, serif", text: "#3d0c02", sub: "#9d3c0b", accent: "#e85d04",
+    bg: (W, H) => { const stripes = ["#6a040f", "#d00000", "#e85d04", "#f48c06", "#faa307"]; return `<rect width="${W}" height="${H}" fill="#f3e3c3"/>
+      <defs><clipPath id="sun"><circle cx="${W / 2}" cy="150" r="125"/></clipPath></defs>
+      <g clip-path="url(#sun)"><rect x="0" y="0" width="${W}" height="300" fill="#faa307"/>${Array.from({ length: 6 }, (_, i) => `<rect x="0" y="${160 + i * 20}" width="${W}" height="${4 + i * 2}" fill="#f3e3c3"/>`).join("")}</g>
+      ${stripes.map((c, i) => `<rect x="0" y="${H - 34 - i * 14}" width="${W}" height="14" fill="${c}"/>`).join("")}
+      ${stripes.map((c, i) => `<rect x="0" y="${8 + i * 7}" width="${W}" height="7" fill="${c}" opacity=".9"/>`).reverse().join("")}`; },
+    footerFill: "#f3e3c3", footerY: (H) => H - 50, top: 72,
+    title: plainTitle({ font: "Georgia, 'Times New Roman', serif", weight: 700, italic: true, fill: "#3d0c02", stroke: "#f3e3c3", sw: 6, k: .52 }) },
+
+  metal: { label: "Metal", swatch: "linear-gradient(#000 55%, #b91c1c)", head: "'Old English Text MT', 'Engravers MT', 'Times New Roman', serif", body: "'Times New Roman', serif", text: "#e5e5e5", sub: "#ef4444", accent: "#b91c1c", letter: 2,
+    bg: (W, H, rnd) => { let flame = `M0 ${H}`; for (let x = 0; x <= W; x += 20) flame += ` L${x} ${(H - 30 - rnd() * 70).toFixed(0)} L${x + 10} ${(H - 6 - rnd() * 20).toFixed(0)}`; flame += ` L${W} ${H}Z`;
+      return `<defs><radialGradient id="pbg" cx=".5" cy=".12" r=".8"><stop offset="0" stop-color="#4a0909"/><stop offset=".55" stop-color="#0a0505"/><stop offset="1" stop-color="#000"/></radialGradient>
+        <linearGradient id="ptx" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff"/><stop offset=".5" stop-color="#8a8a8a"/><stop offset=".55" stop-color="#d4d4d4"/><stop offset="1" stop-color="#f5f5f5"/></linearGradient>
+        <linearGradient id="pfl" x1="0" y1="1" x2="0" y2="0"><stop offset="0" stop-color="#ea580c"/><stop offset=".6" stop-color="#b91c1c"/><stop offset="1" stop-color="#450a0a" stop-opacity="0"/></linearGradient></defs>
+      <rect width="${W}" height="${H}" fill="url(#pbg)"/>
+      <g stroke="#fff" opacity=".07">${Array.from({ length: 40 }, () => { const x = rnd() * W, y = rnd() * H, l = 20 + rnd() * 90; return `<line x1="${x.toFixed(0)}" y1="${y.toFixed(0)}" x2="${(x + l).toFixed(0)}" y2="${(y + l * .4).toFixed(0)}" stroke-width="${(rnd() + .3).toFixed(1)}"/>`; }).join("")}</g>
+      <path d="${flame}" fill="url(#pfl)" opacity=".85"/>
+      <rect x="14" y="14" width="${W - 28}" height="${H - 28}" fill="none" stroke="#7f1d1d" stroke-width="3"/><rect x="22" y="22" width="${W - 44}" height="${H - 44}" fill="none" stroke="#7f1d1d" stroke-width="1"/>`; },
+    footStroke: "#000", footerFill: "#f5f5f5",
+    title: plainTitle({ font: "'Old English Text MT', 'Engravers MT', 'Times New Roman', serif", fill: "url(#ptx)", stroke: "#7f1d1d", sw: 4, k: .6 }) },
+
+  festival: { label: "Festival", swatch: "linear-gradient(#38bdf8, #f472b6, #fbbf24)", head: "'Arial Rounded MT Bold', 'Trebuchet MS', 'Arial Black', sans-serif", body: "'Trebuchet MS', sans-serif", text: "#fff", sub: "#fef3c7", accent: "#fff",
+    nameStroke: "#4c1d95", subStroke: "#4c1d95",
+    bg: (W, H) => { const flags = ["#f43f5e", "#facc15", "#22c55e", "#3b82f6", "#a855f7"]; return `<defs><linearGradient id="pbg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#38bdf8"/><stop offset=".55" stop-color="#f472b6"/><stop offset="1" stop-color="#fbbf24"/></linearGradient></defs>
+      <rect width="${W}" height="${H}" fill="url(#pbg)"/>
+      <circle cx="${W * .82}" cy="${H - 125}" r="70" fill="#fde68a" opacity=".8"/><circle cx="${W * .82}" cy="${H - 125}" r="98" fill="#fde68a" opacity=".2"/>
+      <path d="M0 ${H - 110} Q ${W * .25} ${H - 190} ${W * .5} ${H - 120} T ${W} ${H - 140} V ${H} H 0Z" fill="#7c3aed" opacity=".55"/>
+      <path d="M0 ${H - 60} Q ${W * .3} ${H - 120} ${W * .6} ${H - 70} T ${W} ${H - 80} V ${H} H 0Z" fill="#4c1d95" opacity=".7"/>
+      <path d="M0 14 Q ${W / 2} 46 ${W} 14" fill="none" stroke="#fff" stroke-width="2"/>
+      ${Array.from({ length: 14 }, (_, i) => { const t = (i + .5) / 14, x = t * W, y = 14 + 4 * 32 * t * (1 - t) / 1; return `<polygon points="${(x - 14).toFixed(0)},${y.toFixed(0)} ${(x + 14).toFixed(0)},${y.toFixed(0)} ${x.toFixed(0)},${(y + 30).toFixed(0)}" fill="${flags[i % flags.length]}"/>`; }).join("")}`; },
+    top: 70,
+    title: plainTitle({ font: "'Arial Rounded MT Bold', 'Trebuchet MS', 'Arial Black', sans-serif", weight: 900, fill: "#fff", stroke: "#4c1d95", sw: 7 }) },
+
+  minimal: { label: "Minimal", swatch: "linear-gradient(90deg, #e11d48 30%, #f4f1ea 30%)", head: "'Helvetica Neue', Arial, sans-serif", body: "'Helvetica Neue', Arial, sans-serif", text: "#111", sub: "#666", accent: "#e11d48", align: "start",
+    bg: (W, H) => `<rect width="${W}" height="${H}" fill="#f4f1ea"/><rect x="0" y="0" width="20" height="${H}" fill="#e11d48"/>
+      <g stroke="#111" opacity=".06">${Array.from({ length: 6 }, (_, i) => `<line x1="${40 + i * (W - 80) / 5}" y1="0" x2="${40 + i * (W - 80) / 5}" y2="${H}"/>`).join("")}</g>`,
+    title: (t, x, y, fs, w) => {  // Swiss: one word a line, big and tight
+      const font = "'Helvetica Neue', Arial, sans-serif", words = t.split(/\s+/);
+      while (words.length > 4) { let k = 0; for (let i = 1; i < words.length - 1; i++) if (words[i].length + words[i + 1].length < words[k].length + words[k + 1].length) k = i; words.splice(k, 2, words[k] + " " + words[k + 1]); }
+      const f = Math.min(fs * 1.4, ...words.map((wd) => fs * w / textW(wd, fs, font, { weight: 900 })));
+      return { h: words.length * f * .92 + 4, svg: words.map((wd, i) => `<text x="${x}" y="${(y + f * .8 + i * f * .92).toFixed(0)}" font-family="'Helvetica Neue', Arial, sans-serif" font-weight="900" font-size="${f.toFixed(0)}" letter-spacing="-1" fill="${i === words.length - 1 ? "#e11d48" : "#111"}">${esc(wd)}</text>`).join("") };
+    } },
+};
+const POSTER_SIZES = { poster: ["Poster", 600, 900], square: ["Square", 600, 600], story: ["Story", 600, 1066] };
+const posterDefaults = (g) => ({
+  style: "arena", size: "poster", logos: true, setnames: true, counts: true, songs: false, headliner: false,
+  top: "RockWizard presents", when: new Date((g.started || g.t) * 1000).toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" }), where: "",
+  foot: g.lineup.length > 1 ? "Battle of the bands · vote in RockWizard" : "Live in Clone Hero",
+});
+
+async function posterSVG(g, o = posterDefaults(g)) {
+  const st = POSTER_STYLES[o.style] || POSTER_STYLES.arena, [, W, H] = POSTER_SIZES[o.size] || POSTER_SIZES.poster, rnd = prand(g.id + o.style);
+  const left = st.align === "start", cx = left ? 40 : W / 2, anchor = left ? "start" : "middle", tw = W - 80;
+  let y = st.top || 44, head = "";
+  if (o.top) { head += `<text x="${cx}" y="${y}" text-anchor="${anchor}" font-family="${st.body}" font-size="18" letter-spacing="5" fill="${st.sub}" ${st.subStroke ? `stroke="${st.subStroke}" stroke-width="3" paint-order="stroke"` : ""}${fitAttr(o.top.toUpperCase(), 18, tw, st.body, { ls: 5 })}>${esc(o.top.toUpperCase())}</text>`; y += 22; }
+  const name = g.name.toUpperCase(), T = st.title(name, cx, y, o.size === "square" ? 60 : 72, W - 70, anchor, rnd);
+  head += T.svg; y += T.h + 14;
+  const info = [o.when, o.where].filter(Boolean).join(" · ");
+  if (info) { head += `<text x="${cx}" y="${y + 12}" text-anchor="${anchor}" font-family="${st.body}" font-size="22" fill="${st.text}" ${st.nameStroke ? `stroke="${st.nameStroke}" stroke-width="4" paint-order="stroke"` : ""}${fitAttr(info, 22, tw, st.body)}>${esc(info)}</text>`; y += 38; }
+  head += `<rect x="40" y="${y}" width="${W - 80}" height="3" fill="${st.accent}"/>`; y += 22;
+
+  const footY = st.footerY ? st.footerY(H) : H - 40, bottom = (o.foot ? footY - 30 : H - 40);
+  const order = o.headliner ? g.lineup.slice().reverse() : g.lineup, n = order.length || 1;
+  const slot = Math.min(o.songs ? 210 : 160, (bottom - y) / n), size = o.logos ? Math.min(120, slot - 16) : 0;
+  const rows = await Promise.all(order.map(async (x, i) => {
+    const y0 = y + Math.max(0, (bottom - y - n * slot) / 2) + i * slot;
+    const art = !o.logos ? "" : x.image
+      ? `<image href="${await posterImg(`/api/bands/${encodeURIComponent(x.band)}/image?v=${x.image}`)}" x="40" y="${y0.toFixed(0)}" width="${size}" height="${size}" preserveAspectRatio="xMidYMid meet"/>`
+      : logoSVG(gigBand(x)).replace('<svg viewBox="0 0 160 160"', `<svg x="40" y="${y0.toFixed(0)}" width="${size}" height="${size}" viewBox="0 0 160 160"`);
+    const tx = o.logos ? 60 + size : left ? 40 : W / 2, ta = o.logos || left ? "start" : "middle", room = o.logos ? W - 40 - tx : tw;
+    const big = Math.max(18, Math.min(i === 0 ? 40 : 30, slot * (i === 0 ? .32 : .26)));
+    const sub = [o.setnames && x.setlist_name, o.counts && x.songs.length && plural(x.songs.length, "song"), o.counts && x.length && fmtLen(x.length)].filter(Boolean).join(" · ");
+    // song titles, wrapped onto as many lines as the slot has room for
+    const lines = [];
+    if (o.songs && x.songs.length) {
+      const most = Math.max(1, Math.floor((slot - big - (sub ? 26 : 0) - 24) / 17));
+      let cur = "";
+      for (const s of x.songs.map((s) => s.title || s.name || "")) {
+        const add = cur ? `${cur} · ${s}` : s;
+        if (textW(add, 13, st.body) > room && cur) { lines.push(cur); cur = s; } else cur = add;
+        if (lines.length >= most) break;
+      }
+      if (cur && lines.length < most) lines.push(cur);
+      if (lines.length >= most && x.songs.map((s) => s.title || s.name).join(" · ").length > lines.join(" · ").length) lines[lines.length - 1] = lines[lines.length - 1].replace(/ · [^·]*$/, "") + " …";
+    }
+    const block = big + (sub ? 26 : 0) + lines.length * 17, top = (o.logos ? y0 + size / 2 : y0 + slot / 2 - 8) - block / 2;
+    const stroke = (c, w) => c ? ` stroke="${c}" stroke-width="${w}" paint-order="stroke"` : "";
+    return `${art}<text x="${tx}" y="${(top + big * .5).toFixed(0)}" text-anchor="${ta}" font-family="${st.head}" font-size="${big.toFixed(0)}" fill="${st.text}" dominant-baseline="central" letter-spacing="${st.letter || 0}"${stroke(st.nameStroke, 5)}${st.nameFilter ? ` filter="${st.nameFilter}"` : ""}${fitAttr(x.name.toUpperCase(), big, room, st.head, { ls: st.letter, weight: st.headWeight })}>${esc(x.name.toUpperCase())}</text>
+      ${sub ? `<text x="${tx}" y="${(top + big + 18).toFixed(0)}" text-anchor="${ta}" font-family="${st.body}" font-size="16" fill="${st.sub}"${stroke(st.subStroke, 3)}${fitAttr(sub, 16, room, st.body)}>${esc(sub)}</text>` : ""}
+      ${lines.map((l, k) => `<text x="${tx}" y="${(top + big + (sub ? 26 : 0) + 14 + k * 17).toFixed(0)}" text-anchor="${ta}" font-family="${st.body}" font-size="13" fill="${st.text}" opacity=".85"${stroke(st.subStroke, 3)}${fitAttr(l, 13, room, st.body)}>${esc(l)}</text>`).join("")}`;
+  }));
+  const foot = o.foot ? `<text x="${cx}" y="${footY}" text-anchor="${anchor}" font-family="${st.body}" font-size="18" letter-spacing="3" fill="${st.footerFill || st.sub}" ${st.footStroke || st.subStroke ? `stroke="${st.footStroke || st.subStroke}" stroke-width="4" paint-order="stroke"` : ""}${fitAttr(o.foot.toUpperCase(), 18, tw, st.body, { ls: 3 })}>${esc(o.foot.toUpperCase())}</text>` : "";
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}">${st.bg(W, H, rnd)}${head}${rows.join("")}${foot}</svg>`;
+}
+
 async function showPoster(g) {
+  const keyOf = "poster_" + g.id;
+  let o = posterDefaults(g);
+  try { o = { ...o, ...JSON.parse(localStorage.getItem("poster_style") || "{}"), ...JSON.parse(localStorage.getItem(keyOf) || "{}") }; } catch (e) { /* defaults */ }
+  const keep = () => { try { localStorage.setItem(keyOf, JSON.stringify(o)); localStorage.setItem("poster_style", JSON.stringify({ style: o.style, size: o.size })); } catch (e) { /* not kept */ } };
   const scrim = document.createElement("div"); scrim.className = "scrim";
-  const m = document.createElement("div"); m.className = "modal card avmodal";
-  m.innerHTML = `<div class="avtop"><div class="row spread"><h2 style="margin:0">Poster</h2><button class="btn small" id="px">Close</button></div></div>
-    <div class="avbody"><div class="poster"><span class="spinner"></span></div></div>
-    <div class="avfoot"><span class="grow"></span><button class="btn primary" id="psave" disabled>Save picture</button></div>`;
+  const m = document.createElement("div"); m.className = "modal card avmodal postmodal";
+  const field = (k, label, ph) => `<label class="pfield"><span class="faint">${label}</span><input data-po="${k}" value="${esc(o[k])}" placeholder="${esc(ph)}" maxlength="60"></label>`;
+  const check = (k, label) => `<label class="pcheck"><input type="checkbox" data-pc="${k}" ${o[k] ? "checked" : ""}> ${label}</label>`;
+  m.innerHTML = `<div class="avtop"><div class="row spread"><h2 style="margin:0">Poster</h2><button class="btn small" id="px">Close</button></div>
+      <div class="poster"><span class="spinner"></span></div></div>
+    <div class="avbody">
+      <div class="avsec"><div class="faint">Style</div><div class="pstyles">${Object.entries(POSTER_STYLES).map(([k, s]) =>
+        `<button class="pstyle${o.style === k ? " on" : ""}" data-pst="${k}"><span style="background:${s.swatch}"></span>${s.label}</button>`).join("")}</div></div>
+      <div class="avsec"><div class="faint">Shape</div><div class="tabs">${Object.entries(POSTER_SIZES).map(([k, [l]]) =>
+        `<button class="${o.size === k ? "on" : ""}" data-psz="${k}">${l}</button>`).join("")}</div></div>
+      <div class="avsec"><div class="faint">Words</div>${field("top", "Top line", "RockWizard presents")}${field("when", "When", "Friday night")}${field("where", "Where", "The basement, Mike's garage…")}${field("foot", "Bottom line", "Free entry · bring snacks")}</div>
+      <div class="avsec"><div class="faint">Show</div><div class="pchecks">${check("logos", "Band logos")}${check("setnames", "Set list names")}${check("counts", "Song count and length")}${check("songs", "Song titles")}${check("headliner", "Headliner on top (last band first)")}</div></div>
+    </div>
+    <div class="avfoot"><button class="btn" id="preset">Reset</button><span class="grow"></span><button class="btn primary" id="psave" disabled>Save picture</button></div>`;
   document.body.append(scrim, m);
   const close = () => { scrim.remove(); m.remove(); };
   scrim.onclick = close; $("#px", m).onclick = close;
-  let svg;
-  try { svg = await posterSVG(g); } catch (e) { $(".poster", m).innerHTML = `<p class="chip red">${esc(e.message)}</p>`; return; }
-  $(".poster", m).innerHTML = svg;
-  const save = $("#psave", m);
-  save.disabled = false;
-  save.onclick = async () => {
+  let svg = "", n = 0;
+  const draw = async () => {
+    const mine = ++n;
+    let s2;
+    try { s2 = await posterSVG(g, o); } catch (e) { $(".poster", m).innerHTML = `<p class="chip red">${esc(e.message)}</p>`; return; }
+    if (mine !== n) return;  // a newer pick is already drawing
+    svg = s2; $(".poster", m).innerHTML = svg; $("#psave", m).disabled = false;
+  };
+  const pick = (sel, attr, k) => $$(sel, m).forEach((b) => b.onclick = () => { o[k] = b.dataset[attr]; $$(sel, m).forEach((x) => x.classList.toggle("on", x === b)); keep(); draw(); });
+  pick("[data-pst]", "pst", "style"); pick("[data-psz]", "psz", "size");
+  let t;
+  $$("[data-po]", m).forEach((x) => x.oninput = () => { o[x.dataset.po] = x.value.trim(); keep(); clearTimeout(t); t = setTimeout(draw, 250); });
+  $$("[data-pc]", m).forEach((x) => x.onchange = () => { o[x.dataset.pc] = x.checked; keep(); draw(); });
+  $("#preset", m).onclick = () => { try { localStorage.removeItem(keyOf); } catch (e) { /* fine */ } close(); showPoster(g); };
+  $("#psave", m).onclick = async () => {
     try {
+      const [, W, H] = POSTER_SIZES[o.size] || POSTER_SIZES.poster;
       const img = new Image();
       img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
       await img.decode();
-      const c = document.createElement("canvas"); c.width = 1200; c.height = 1800;
-      c.getContext("2d").drawImage(img, 0, 0, 1200, 1800);
+      const c = document.createElement("canvas"); c.width = W * 2; c.height = H * 2;
+      c.getContext("2d").drawImage(img, 0, 0, W * 2, H * 2);
       const blob = await new Promise((r) => c.toBlob(r, "image/png"));
       const file = new File([blob], `${g.name.replace(/[^\w\- ]+/g, "").trim() || "gig"} poster.png`, { type: "image/png" });
       if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: g.name }); return; }
@@ -2357,6 +2523,7 @@ async function showPoster(g) {
       setTimeout(() => URL.revokeObjectURL(a.href), 5000);
     } catch (e) { if (e.name !== "AbortError") toast("Couldn't save the poster: " + e.message); }
   };
+  draw();
 }
 
 // from a song's drawer: pick one of your bands' set lists
