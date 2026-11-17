@@ -19,6 +19,7 @@ import time
 import traceback
 import uuid
 import xml.etree.ElementTree as ET
+from collections import Counter
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -663,13 +664,32 @@ def scoreboard():
     return board.build()
 
 
+def _library_for_suggestions():
+    """The library's songs (as same-song keys) and its artists with how many songs each."""
+    rows = song_index()
+    owned = {library.song_key(r["artist"], r["title"]) for r in rows}
+    artists = Counter(search.lead_artist(r["artist"]) for r in rows if r["artist"].strip())
+    return owned, artists
+
+
 @app.get("/api/suggestions")
 def suggestions():
-    """The picks, each with its cover and preview clip when already known ("sampled": asked for)."""
-    songs = suggest.picks(staging_dir(), live_dir())
-    samples.warm([(s["artist"], s["title"]) for s in songs])
-    known = [samples.cached(s["artist"], s["title"]) for s in songs]
-    return {"songs": [s | {"sampled": k is not None} | (k or {}) for s, k in zip(songs, known)]}
+    """This week's batch, each song with its cover and preview clip when already known
+    ("sampled": asked for). "building": a new batch is being made."""
+    b = suggest.current(*_library_for_suggestions())
+    songs = b["songs"]
+    samples.warm([(s["artist"], s["title"]) for s in songs if not s.get("audio")])
+    out = []
+    for s in songs:
+        k = {"art": s["art"], "audio": s["audio"]} if s.get("audio") else samples.cached(s["artist"], s["title"])
+        out.append({x: s[x] for x in ("group", "artist", "title", "why")} | {"sampled": k is not None} | (k or {}))
+    return {"songs": out, "week": b["week"], "made": b["made"], "building": b["building"]}
+
+
+@app.post("/api/suggestions/new")
+def suggestions_new():
+    """A new batch now, without waiting for next week."""
+    return {"started": suggest.refresh(*_library_for_suggestions())}
 
 
 @app.get("/api/sample")

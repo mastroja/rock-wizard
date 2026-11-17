@@ -392,8 +392,8 @@ function renderCreate() {
       <div id="results"></div>
     </div>
     <div class="card">
-      <div class="row spread"><h2 style="margin:0">Suggested songs</h2><button class="btn small" id="sgmore">Show me more</button></div>
-      <p class="faint" style="margin:4px 0 12px">Picked by hand for how they should play. Tap a cover to hear the song. Anything already in your library is left out.</p>
+      <div class="row spread wrap"><h2 style="margin:0">Suggested songs</h2><div class="row" style="gap:6px"><button class="btn small" id="sgmore">Show me more</button><button class="btn small" id="sgnew">New batch</button></div></div>
+      <p class="faint" style="margin:4px 0 12px">A new batch every Monday: this week's iTunes charts, more by bands you already play, and hand picks. Tap a cover to hear a song. Anything already in your library is left out. <span id="sgwhen"></span></p>
       <div id="suggest"><div class="empty"><span class="spinner"></span></div></div>
     </div>
     <details class="card fold" id="moreways">
@@ -434,14 +434,35 @@ function renderCreate() {
   loadSuggestions();
 }
 
-let suggestGroup = "All", suggestRun = 0;
+let suggestGroup = "All", suggestRun = 0, suggestPoll = 0;
 const sgKey = (s) => `${s.artist}|${s.title}`;
 function sgSeen() { try { return JSON.parse(localStorage.getItem("sg_seen")) || {}; } catch (e) { return {}; } }
 async function loadSuggestions() {
   const box = $("#suggest");
   let songs;
-  try { songs = (await api("/api/suggestions")).songs; } catch (e) { box.innerHTML = `<p class="chip red">${esc(e.message)}</p>`; return; }
+  let res;
+  try { res = await api("/api/suggestions"); songs = res.songs; } catch (e) { box.innerHTML = `<p class="chip red">${esc(e.message)}</p>`; return; }
   if (!box.isConnected) return;  // left the page while it loaded
+  const when = $("#sgwhen"), nb = $("#sgnew");
+  when.innerHTML = res.building ? `<span class="chip"><span class="spinner"></span> Making a new batch…</span>`
+    : res.made ? `This batch: ${esc(new Date(res.made * 1000).toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" }))}.` : "";
+  nb.disabled = res.building;
+  nb.onclick = async () => {
+    nb.disabled = true;
+    try { await post("/api/suggestions/new", {}); } catch (e) { toast(e.message); }
+    loadSuggestions();
+  };
+  clearTimeout(suggestPoll);
+  if (res.building) {  // check back until the new batch is in, then show it
+    const check = async () => {
+      let busy = true;
+      try { busy = (await api("/api/suggestions")).building; } catch (e) { /* try again */ }
+      if (!box.isConnected) return;
+      if (busy) suggestPoll = setTimeout(check, 5000);
+      else { toast("A new batch of suggestions is in"); loadSuggestions(); }
+    };
+    suggestPoll = setTimeout(check, 5000);
+  }
   const groups = ["All", ...new Set(songs.map((s) => s.group))];
   if (!groups.includes(suggestGroup)) suggestGroup = "All";
   box.innerHTML = `<div class="tabs" style="margin-bottom:10px">${groups.map((g) => `<button data-sg="${esc(g)}">${esc(g)}</button>`).join("")}</div><div id="sglist"></div>`;

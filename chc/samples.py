@@ -76,6 +76,17 @@ def get(artist: str, title: str, renew: bool = False) -> dict:
         return found
 
 
+def fetch(url: str) -> dict:
+    """Any other iTunes request (the weekly suggestions), spaced out with the previews'."""
+    global _last
+    with _net_lock:
+        time.sleep(max(0.0, _last + GAP - time.time()))
+        try:
+            return search._json(url)
+        finally:
+            _last = time.time()
+
+
 def warm(songs: list[tuple[str, str]]) -> None:
     """Fetch the previews not known yet, slowly, in the background (one run at a time)."""
     global _warming
