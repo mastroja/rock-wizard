@@ -10,7 +10,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import analysis, audio, chart, feedback, ml, phrases, rating, structure, vocals
+from . import analysis, audio, chart, feedback, ml, phrases, rating, structure, version, vocals
 
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 ROOT = Path(__file__).resolve().parent.parent
@@ -77,6 +77,13 @@ def guitar_stem_source() -> str:
     return src if src in ("s6", "sw") else ""
 
 
+def stem_label(guitar_wav: Path, other_wav: Path) -> str:
+    """What guitar_stem gave the guitar model, for the song's version record (chc.version)."""
+    if Path(guitar_wav) == Path(other_wav):
+        return "ft"
+    return "s6" if Path(guitar_wav).parent.name == "six" else "sw"
+
+
 def guitar_stem(wav: Path, work: Path, other_wav: Path, on_progress, stop: threading.Event) -> Path:
     """The stem the guitar model was trained on. Falls back to Demucs' "other" if the SW separator
     fails (the SW-trained model still charts better from that than the older model did)."""
@@ -108,7 +115,7 @@ def chart_stems(guitar_wav: Path, bass_wav: Path, drums_wav: Path, mix_wav: Path
         mix_x, mix_sr = audio.read_wav(mix_wav)
         b, d = ml.beat_times(mix_x, mix_sr)
         if len(b) >= 16:
-            beatmap = chart.BeatMap(b, d)
+            beatmap = chart.BeatMap(b, d, clean=True)
     heur_drums, env = analysis.drum_hits(drums_x, sr)
     bpm, offset = analysis.estimate_tempo(env, sr)
     if beatmap is not None:
@@ -181,22 +188,23 @@ def write_chart(song_dir: Path, c: dict, title: str, artist: str, charter: str, 
         preview_ms = int(min(30, max(0, length - 40)) * 1000)
     else:
         preview_ms += int(c["lead"] * 1000)
-    models = " ".join(f"{k}:{ml.model_tag(k)}" for k in ("guitar", "bass", "drums") if c[k] and ml.available(k))
     chart.write_ini(song_dir / "song.ini", title, artist, charter, int(length * 1000), counts,
                     preview_ms=preview_ms, album=d.album if d else "", genre=d.genre if d else "",
-                    year=d.year if d else "", tiers=tiers, models=models)
+                    year=d.year if d else "", tiers=tiers, extra=version.fields(c))
     from . import library
     library.save_original(song_dir)  # what the app wrote, to compare hand fixes against later
     return counts
 
 
-UPDATE_STEPS = ["Reading the song's audio", "Finding the beat", "Writing the new notes"]
+UPDATE_STEPS = ["Reading the song's audio", "Finding the guitar", "Finding the beat", "Writing the new notes"]
 
 
 def update_song(song_dir: Path, on_step=lambda i: None, on_progress=lambda frac: None,
                 stop: threading.Event | None = None) -> Path:
-    """Re-chart a song this app made, from the stems already in its folder (no separation, no
-    original audio needed). The old notes.mid and song.ini are backed up first; audio, cover,
+    """Re-chart a song this app made, from the stems already in its folder (no original audio
+    needed). The guitar model hears what it was trained on: the folder keeps Demucs' "other" stem
+    for playing along, so the stems are added back into the whole song and that is split again for
+    the guitar (guitar_stem). The old notes.mid and song.ini are backed up first; audio, cover,
     name and song details are kept. Returns the backup folder."""
     from . import library
     from .search import Details
@@ -222,10 +230,15 @@ def update_song(song_dir: Path, on_step=lambda i: None, on_progress=lambda frac:
         length = audio.duration(work / "mix.wav")
         check()
         on_step(1)
-        on_progress(0.15)
-        c = chart_stems(wavs["guitar"], wavs["bass"], wavs["drums"], work / "mix.wav",
-                        lambda f: on_progress(0.15 + 0.8 * f), check, lambda: on_step(2),
+        on_progress(0.08)
+        guitar_wav = guitar_stem(work / "mix.wav", work, wavs["guitar"], lambda f: on_progress(0.08 + 0.3 * f), stop)
+        check()
+        on_step(2)
+        on_progress(0.4)
+        c = chart_stems(guitar_wav, wavs["bass"], wavs["drums"], work / "mix.wav",
+                        lambda f: on_progress(0.4 + 0.55 * f), check, lambda: on_step(3),
                         wavs["vocals"], ini.get("artist", ""), ini.get("name", ""))
+        c["stems"] = stem_label(guitar_wav, wavs["guitar"])
         check()
         audio.ensure_writable(song_dir / name for name in library.OUR_STEMS)
         saved = library.backup(song_dir, "before chart update", files=["notes.mid", "song.ini", *library.OUR_STEMS])
@@ -313,6 +326,7 @@ def make_song(src: Path, artist: str, title: str, songs_dir: Path, charter: str 
         c = chart_stems(guitar_wav, preview_dir / "bass.wav", preview_dir / "drums.wav", wav,
                         lambda f: on_progress(0.72 + 0.21 * f), check, lambda: on_step(3),
                         preview_dir / "vocals.wav", artist, title)
+        c["stems"] = stem_label(guitar_wav, preview_dir / "other.wav")
         check()
 
         on_step(4); on_progress(0.93)

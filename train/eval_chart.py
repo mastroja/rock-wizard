@@ -6,9 +6,14 @@ makes them, under a few charting variants:
   smooth  grid, plus beat times smoothed before the tempo map is built
   repeat  grid, plus repeated bars charted alike (chc.structure)
   both    smooth + repeat
+  final   what the app does: grid + its per-instrument repeat settings
+  clean   final, on the tidier tempo map (chart.BeatMap(clean=True))
+CHC_VARIANTS=final,clean picks which to run; the networks run on the GPU when there is one (hide it
+with CUDA_VISIBLE_DEVICES=-1 to run on the CPU while training uses it).
 
 For each: notes at the right time F1, exact frets/pads F1, share of notes off the grid, and
 how often bars with the same rhythm also get the same frets (real charts: usually 25-60%)."""
+import os
 import sys
 import tempfile
 from collections import defaultdict
@@ -21,7 +26,7 @@ from chc import beats, chart, ml, structure
 from chc import nn as cnn
 from . import charts, data, metrics
 
-VARIANTS = ["now", "grid", "smooth", "repeat", "both"]
+VARIANTS = os.environ.get("CHC_VARIANTS", "now,grid,smooth,repeat,both").split(",")
 SECT_THR = {}  # per-instrument override for the section variants (tuning)
 INST = ["guitar", "bass", "drums"]
 
@@ -75,9 +80,12 @@ def chart_events(parsed, inst):
 def main():
     split = sys.argv[1] if len(sys.argv) > 1 else "test"
     thr = float(sys.argv[2]) if len(sys.argv) > 2 else None  # None: structure.REPEAT_THR
+    global DEVICE
+    import torch
+    DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
     index = data.load_index()
-    mix_model, _ = ml.load("mix")
-    models = {k: ml.load(k)[0] for k in INST}
+    mix_model, _ = ml.load("mix", DEVICE)
+    models = {k: ml.load(k, DEVICE)[0] for k in INST}
 
     def feat_file(i, s, k):
         """The app models' input for this song: v2 files for v2-kind models, else the v3
@@ -95,7 +103,7 @@ def main():
     tmp = Path(tempfile.mkdtemp())
     for n, (i, s) in enumerate(rows):
         mix_feats = np.load(data.feat_path(i, "mix"))
-        p = cnn.predict(mix_model, mix_feats, "cuda")
+        p = cnn.predict(mix_model, mix_feats, DEVICE)
         b, d = beats.track(p[:, 0], p[:, 1])
         if len(b) < 16:
             continue
@@ -103,16 +111,16 @@ def main():
         for k in INST:
             if k in s["notes"] and feat_file(i, s, k).exists():
                 feats[k] = np.load(feat_file(i, s, k))
-                prob = cnn.predict(models[k], feats[k], "cuda")
+                prob = cnn.predict(models[k], feats[k], DEVICE)
                 decoded[k] = ml.decode_drums(prob) if k == "drums" else \
                     ml.decode_fretted(k, prob, **ml.decode_settings(k))
         for v in VARIANTS:
-            bm = chart.BeatMap(b, d, smooth=4 if v in ("smooth", "both") else 0)
+            bm = chart.BeatMap(b, d, smooth=4 if v in ("smooth", "both") else 0, clean=v == "clean")
             parts = dict(decoded)
             if v in ("repeat", "both"):
                 parts = {k: structure.make_consistent(k, notes, feats[k], bm, thr, method="bars")
                          for k, notes in parts.items()}
-            elif v == "final":  # what the app does: per-instrument defaults
+            elif v in ("final", "clean"):  # what the app does: per-instrument defaults
                 parts = {k: structure.make_consistent(k, notes, feats[k], bm) for k, notes in parts.items()}
             elif v.startswith("sect"):  # section matching; "_inst": instrument only; "_vote": majority
                 parts = {k: structure.make_consistent(k, notes, feats[k], bm, SECT_THR.get(k),
@@ -130,7 +138,8 @@ def main():
                 reps[v][k] = {x: reps[v][k].get(x, 0) + c[x] for x in c}
                 if k in st:
                     stats[v][k].append(st[k])
-        real = tick_stats(Path(s["folder"]) / "notes.mid")
+        real_mid = Path(s["folder"]) / "notes.mid"
+        real = tick_stats(real_mid) if real_mid.exists() else {}  # .chart songs: no grid stats
         for k in decoded:
             if k in real:
                 stats["real"][k].append(real[k])

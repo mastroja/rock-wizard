@@ -23,6 +23,8 @@ TOM_MARK = {2: 110, 3: 111, 4: 112}
 STRAIGHT_BIAS = 0.5
 UNDECIDED = 0.3
 LEAD_IN = 3.0  # seconds of empty highway before a chart's first note
+STEADY_TOL, STEADY_SHARE = 0.025, 0.9  # BeatMap(clean): one tempo when 90% of beats are this close to it
+CLEAN_TOL = 0.02  # BeatMap(clean): beats may sit this far off their run's even spacing (seconds)
 INTRO_BPM = (60, 200)  # intro bars take the song's opening tempo, within these
 
 
@@ -41,16 +43,64 @@ class TempoMap:
         return TPQ + int(round((t - self.lead) / self.spb * TPQ / g)) * g
 
 
+def repair_beats(b: np.ndarray) -> np.ndarray:
+    """Mend the beat tracker's slips: a missed beat (a gap of about two beats) gets the missing
+    beats put back evenly, and an extra beat (a gap of about half a beat) is dropped, so the count
+    of beats, and with it where each bar starts, stays right for the rest of the song."""
+    b = np.asarray(b, float)
+    if len(b) < 9:
+        return b
+    gaps = np.diff(b)
+    med = np.array([np.median(gaps[max(0, k - 8):k + 9]) for k in range(len(gaps))])
+    out = [b[0]]
+    for k in range(1, len(b)):
+        r = (b[k] - out[-1]) / med[k - 1]
+        if r < 0.6:
+            continue
+        if r > 1.5:
+            m = int(round(r))
+            out += list(out[-1] + (b[k] - out[-1]) * np.arange(1, m) / m)
+        out.append(b[k])
+    return np.array(out)
+
+
+def steady_fit(b: np.ndarray, tol: float = STEADY_TOL, share: float = STEADY_SHARE):
+    """(first beat, seconds per beat) when one tempo fits the song (played to a click), else None.
+    The line is fitted again without the beats far off it (the tracker's slips), and the song
+    counts as steady when `share` of all its beats are within `tol` of that line."""
+    if len(b) < 32:
+        return None
+    i = np.arange(len(b))
+    keep = np.ones(len(b), bool)
+    for _ in range(4):
+        P, t0 = np.polyfit(i[keep], b[keep], 1)
+        res = np.abs(b - (t0 + P * i))
+        keep = res < max(0.05, float(np.percentile(res, 80)))
+    if np.mean(res < tol) >= share:
+        return float(t0), float(P)
+    return None
+
+
 class BeatMap:
     """Variable tempo map that follows tracked beats, so charts line up beat by beat.
 
     Tempo is piecewise constant; each segment is the longest run of beats one tempo fits
     within `tol` seconds. A lead-in segment (before the first beat) lets bars start on a
     tracked downbeat.
+
+    clean=True is the tidier map (what the app writes): the tracker's missed and extra beats are
+    mended, bar 1 is wherever most of the tracked downbeats say, a song played to a click gets one
+    tempo, and otherwise tempo changes only at bar lines (as far apart as the beats allow), so a
+    song reads as "about 135" instead of jumping between odd numbers. Beats are carried back to
+    the start of the song at its opening tempo, so an intro has a grid too; add_intro then gives
+    the short stretch before the first beat the song's tempo as well.
     """
 
-    def __init__(self, beats, downbeats=None, snap=True, tol=0.015, smooth=0):
+    def __init__(self, beats, downbeats=None, snap=True, tol=0.015, smooth=0, clean=False):
         b = np.asarray(beats, float)
+        if clean:
+            self._clean(b, downbeats, snap)
+            return
         if smooth:
             b = smooth_beats(b, smooth)
         # a first beat within half a beat of the start would make the lead-in (time 0 to that
@@ -82,6 +132,61 @@ class BeatMap:
             i = j
         if not segs:
             segs = [(0, float(b[0]), 0.5)]
+        self.segs = segs
+        self.seg_times = np.array([x[1] for x in segs])
+        self.n_beats = n
+
+    def _clean(self, b, downbeats, snap):
+        self.snap = snap
+        self.bar_grid = None
+        b = repair_beats(b)
+        # which beat starts a bar: the phase most tracked downbeats agree on
+        phase = 0
+        if downbeats is not None and len(downbeats):
+            near = [int(np.argmin(np.abs(b - t))) for t in downbeats if np.min(np.abs(b - t)) < 0.07]
+            if near:
+                phase = int(np.argmax(np.bincount(np.array(near) % 4, minlength=4)))
+        steady = steady_fit(b)
+        if steady:  # one tempo: the beats are the fitted line
+            t0, P = steady
+            b = t0 + P * np.arange(len(b))
+        # carry the beats back to the start at the opening tempo, so an intro without a tracked
+        # beat still gets bars (the lead-in left over is under a beat long)
+        P0 = float(np.median(np.diff(b[:9]))) if len(b) > 9 else 0.5
+        k = int(max(0.0, (b[0] - 0.05) // P0))
+        if k:
+            b = np.concatenate([b[0] - P0 * np.arange(k, 0, -1), b])
+            phase = (phase + k) % 4
+        # a beat right at the start goes into the lead-in, which must have some length: the chart
+        # puts the lead-in's beats between time 0 and the first beat, so they must not overlap
+        while len(b) > 2 and b[0] < 0.1:
+            b = b[1:]
+            phase = (phase - 1) % 4
+        n = len(b)
+        # lead-in: s beats from time 0 to the first beat, so beat `phase` lands on a bar line
+        s = (-phase) % 4 or 4
+        self.lead_beats, self.lead_len = s, float(b[0])
+        if steady:
+            segs = [(0, float(b[0]), P)]
+        else:
+            # tempo changes only on bar lines: each run is as many whole bars as one tempo fits
+            # within CLEAN_TOL (bar lines exactly, the beats between them within the tolerance)
+            first_bar = (-s) % 4  # index of the first beat on a bar line
+            starts = sorted({0, n - 1, *range(first_bar, n - 1, 4)})
+            segs, a = [], 0
+            while a < len(starts) - 1:
+                i, c = starts[a], a + 1
+                while c + 1 < len(starts):
+                    nxt = starts[c + 1]
+                    P = (b[nxt] - b[i]) / (nxt - i)
+                    if np.max(np.abs(b[i:nxt + 1] - (b[i] + np.arange(nxt + 1 - i) * P))) > CLEAN_TOL:
+                        break
+                    c += 1
+                end = starts[c]
+                segs.append((i, float(b[i]), float((b[end] - b[i]) / (end - i))))
+                a = c
+            if not segs:
+                segs = [(0, float(b[0]), P0)]
         self.segs = segs
         self.seg_times = np.array([x[1] for x in segs])
         self.n_beats = n
@@ -436,7 +541,12 @@ def write_mid(path: Path, bpm: float, offset: float, guitar=None, bass=None, dru
 def add_intro(path: Path, lead: float = LEAD_IN, dry: bool = False) -> float:
     """Add silent bars to the start of a notes.mid whose first note comes less than `lead` seconds
     in, so players see the highway before they have to play. Returns the seconds added: the
-    audio must be delayed by exactly that much (0 if the chart already has room)."""
+    audio must be delayed by exactly that much (0 if the chart already has room).
+
+    It also evens out the lead-in: the beat or few before the first tracked beat, squeezed or
+    stretched to fit between time 0 and that beat (a 200+ BPM blip at the start of a chart). Those
+    beats get the song's own tempo instead, and the audio is delayed by the difference, so nothing
+    after them moves against the music."""
     mid = mido.MidiFile(str(path), clip=True)
     first = None
     for tr in mid.tracks:
@@ -458,13 +568,32 @@ def add_intro(path: Path, lead: float = LEAD_IN, dry: bool = False) -> float:
         if m.type == "set_tempo":
             tempo = tempo_at = m.tempo
     start = now + (first - tick) / mid.ticks_per_beat * tempo / 1e6
-    if start >= lead:
-        return 0.0
-    us = mido.bpm2tempo(float(np.clip(mido.tempo2bpm(tempo_at), *INTRO_BPM)))
+    tpq = mid.ticks_per_beat
+    tempos, t = [], 0
+    for m in mid.tracks[0]:
+        t += m.time
+        if m.type == "set_tempo":
+            tempos.append((t, m))
+    # the lead-in: the tempo at tick 0, up to a following tempo at most a bar later, with no note in it
+    fix = None
+    if len(tempos) >= 2 and tempos[0][0] == 0:
+        (_, m0), (t1, m1) = tempos[0], tempos[1]
+        if 0 < t1 <= 4 * tpq and t1 % tpq == 0 and first >= t1 and abs(m0.tempo / m1.tempo - 1) > 0.05:
+            fix = (m0, m1.tempo, t1 / tpq * (m1.tempo - m0.tempo) / 1e6)
+    delta = fix[2] if fix else 0.0  # how much longer the lead-in gets (can be shorter)
+    us = fix[1] if fix else mido.bpm2tempo(float(np.clip(mido.tempo2bpm(tempo_at), *INTRO_BPM)))
     bar = 4 * us / 1e6
-    bars = int(np.ceil((lead - start) / bar))
+    need = max(lead - (start + delta), -delta)  # the first note gets its room, and nothing is cut
+    bars = int(np.ceil(need / bar - 1e-9)) if need > 0 else 0
+    if not fix and not bars:
+        return 0.0
     if dry:
-        return bars * bar
+        return delta + bars * bar
+    if fix:
+        fix[0].tempo = fix[1]
+    if not bars:
+        mid.save(path)
+        return delta
     shift = bars * 4 * mid.ticks_per_beat
     for i, tr in enumerate(mid.tracks):
         k = 0
@@ -474,14 +603,15 @@ def add_intro(path: Path, lead: float = LEAD_IN, dry: bool = False) -> float:
         if i == 0:
             tr.insert(k, mido.MetaMessage("set_tempo", tempo=us, time=0))
     mid.save(path)
-    return bars * bar
+    return delta + bars * bar
 
 
 def write_ini(path: Path, title: str, artist: str, charter: str, length_ms: int,
               parts: dict, preview_ms: int = 0, album: str = "", genre: str = "", year: str = "",
-              tiers: dict | None = None, models: str = ""):
+              tiers: dict | None = None, models: str = "", extra: dict | None = None):
     """tiers: {"guitar": 0-6, ...} difficulty shown in the song list (chc.rating); 2 if unknown.
-    models: which model files charted it ("guitar:1a2b3c4d ..."; chc.ml.model_tag)."""
+    models: which model files charted it ("guitar:1a2b3c4d ..."; chc.ml.model_tag).
+    extra: more fields, written as they are (chc.version.fields: what charted it)."""
     tiers = tiers or {}
 
     def diff(inst):
@@ -497,4 +627,5 @@ def write_ini(path: Path, title: str, artist: str, charter: str, length_ms: int,
              "chc_generated = 1"]  # marks songs this app made (chc.library.is_ours)
     if models:
         lines.append(f"chc_models = {models}")
+    lines += [f"{k} = {v}" for k, v in (extra or {}).items()]
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")

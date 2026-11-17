@@ -1,0 +1,18 @@
+{
+  "_about": "Names of the models the app has used, by file fingerprint (chc.ml.model_tag: first 8 hex of the file's sha1). A part's models are numbered in the order they went into the app: Guitar 1, Guitar 2, ... A side model for a style keeps its own count (Guitar Busy 1). A trained model that never went into the app has no name; it gets the next number when it is switched in, and its entry is added then. Names never change once given. Numbers 1-3 come from the app's saved snapshots (models/v1, v1-tuned, v2-final).",
+  "e5c000cf": {"name": "Guitar 1", "part": "guitar", "since": "2026-10-24", "note": "first learned guitar model"},
+  "3173a966": {"name": "Guitar 2", "part": "guitar", "since": "2026-10-24", "note": "tuned decoding"},
+  "b9ac665f": {"name": "Guitar 3", "part": "guitar", "since": "2026-10-25", "note": "v2 training set"},
+  "6611de98": {"name": "Guitar 4", "part": "guitar", "since": "2026-10-26", "note": "up / same / down fret outputs"},
+  "1cb37c91": {"name": "Guitar 5", "part": "guitar", "since": "2026-10-26", "note": "chord-size outputs"},
+  "35fecfd4": {"name": "Guitar 6", "part": "guitar", "since": "2026-11-09", "note": "bigger network"},
+  "7cef1138": {"name": "Guitar 7", "part": "guitar", "since": "2026-11-10", "note": "bigger network, hears the BS-RoFormer guitar stem"},
+  "4072ccd8": {"name": "Guitar Busy 1", "part": "guitar_busier", "since": "2026-10-30", "note": "the Busier style in Rechart: catches more fast notes"},
+  "a50a9ec7": {"name": "Bass 1", "part": "bass", "since": "2026-10-24", "note": "first learned bass model"},
+  "a713d590": {"name": "Bass 2", "part": "bass", "since": "2026-10-24", "note": "tuned decoding"},
+  "0de74aaa": {"name": "Bass 3", "part": "bass", "since": "2026-10-25", "note": "v2 training set"},
+  "33b5d457": {"name": "Bass 4", "part": "bass", "since": "2026-10-25", "note": "up / same / down fret outputs"},
+  "50f2e634": {"name": "Drums 1", "part": "drums", "since": "2026-10-24", "note": "first learned drum model"},
+  "326e55be": {"name": "Drums 2", "part": "drums", "since": "2026-10-25", "note": "v2 training set"},
+  "33fd7dd2": {"name": "Beats 1", "part": "mix", "since": "2026-10-24", "note": "beat and downbeat tracker"}
+}

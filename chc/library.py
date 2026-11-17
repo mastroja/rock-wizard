@@ -39,6 +39,20 @@ def original_of(folder: Path) -> Path | None:
     return p if p.exists() else None
 
 
+def hand_edited(folder: Path) -> bool:
+    """Whether someone changed this app's chart by hand since the app wrote it: a notes.chart from
+    an editor, or a notes.mid that is no longer the kept original."""
+    folder = Path(folder)
+    if (folder / "notes.chart").exists():
+        return True
+    kept, mid = original_of(folder), folder / "notes.mid"
+    if not kept or not mid.exists():
+        return False
+    if kept.stat().st_size != mid.stat().st_size:
+        return True
+    return kept.read_bytes() != mid.read_bytes()
+
+
 def save_original(folder: Path, only=None) -> bool:
     """Keep the chart the app has just written, next to the song. It moves, syncs and is removed
     with the song folder, and nothing else ever edits it.

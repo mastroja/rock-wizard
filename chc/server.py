@@ -26,7 +26,7 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import feedback, library, ml, pipeline, rechart, review, samples, search, startup, suggest, tidy
+from . import feedback, library, ml, pipeline, preview, rechart, review, samples, search, social, startup, suggest, tidy, version
 
 ROOT = Path(__file__).resolve().parent.parent
 WEB = ROOT / "web"
@@ -100,6 +100,8 @@ class Job:
     created: float = field(default_factory=time.time)
     args: dict = field(default_factory=dict)
     by: str = ""              # name of the friend who added it ("" for the owner)
+    who: str = ""             # the name of whoever added it, the owner included (activity feed)
+    votes: list = field(default_factory=list)  # names of the people who want it sooner
 
 
 jobs: dict[str, Job] = {}
@@ -109,10 +111,10 @@ CONVERT_STEPS = ["Downloading the song"] + pipeline.STEPS
 GUARDED_ARTISTS = ("taylor swift",)  # charting these takes four popups and a quiz (web/app.js swiftGate)
 
 
-def add_job(kind, label, steps, by="", **args) -> Job:
+def add_job(kind, label, steps, by="", who="", **args) -> Job:
     """label is what the queue shows; args (artist, title, path, url...) go to the job runner.
     (Not called 'title': the song's title arrives in args under that name.)"""
-    j = Job(uuid.uuid4().hex[:10], kind, label, steps, args=args, by=by)
+    j = Job(uuid.uuid4().hex[:10], kind, label, steps, args=args, by=by, who=who)
     jobs[j.id] = j
     stops[j.id] = threading.Event()
     job_queue.put(j.id)
@@ -179,22 +181,35 @@ def run_rechart(j: Job, stop: threading.Event):
     j.result = {"folder": str(folder), "backup": str(saved)}
 
 
+def next_job() -> Job | None:
+    """The waiting job to run now: the one most people voted for, then the oldest."""
+    waiting = [j for j in jobs.values() if j.status == "queued"]
+    return min(waiting, key=lambda j: (-len(j.votes), j.created)) if waiting else None
+
+
 def worker():
     while True:
-        jid = job_queue.get()
-        j = jobs.get(jid)
-        if j is None or j.status == "cancelled":
+        job_queue.get()  # one token per job added; which job runs is next_job's call
+        j = next_job()
+        if j is None:
             continue
+        jid = j.id
         j.status = "running"
         try:
             {"convert": run_convert, "update": run_update, "rechart": run_rechart}[j.kind](j, stops[jid])
             j.status, j.progress, j.step = "done", 1.0, len(j.steps)
+            if j.kind == "convert":
+                _people["t"] = 0
+                social.log("ready", j.who, f"has a song ready: {j.title}", title=j.title,
+                           folder=j.result.get("folder", ""))
         except pipeline.Cancelled:
             j.status = "cancelled"
         except Exception as e:
             traceback.print_exc()
             j.status = "cancelled" if stops[jid].is_set() else "failed"
             j.message = str(e).splitlines()[0] if str(e) else e.__class__.__name__
+            if j.status == "failed" and j.kind == "convert":
+                social.log("failed", j.who, f"had a song that couldn't be charted: {j.title}", title=j.title)
 
 
 threading.Thread(target=worker, daemon=True).start()
@@ -203,12 +218,66 @@ threading.Thread(target=worker, daemon=True).start()
 # ---------- devices ----------
 # Every phone/browser gets its own id cookie (rw_dev). The owner's devices (and this PC) act as the
 # owner; anyone else is asked their name once, and songs they add are tagged with it.
+# One person on one kind of device is one record, however many times they scan the QR code: an
+# iPhone keeps separate cookies for Safari, for each home-screen app and for private tabs, so a
+# new scan arrives looking like a new phone. When it gives a name that a device of the same kind
+# already has, its cookie becomes an alias of that record (cfg["device_alias"]).
 DEVICE_COOKIE = "rw_dev"
+UNNAMED_KEEP = 3600  # seconds a device that never gave a name is remembered
 _devices_lock = threading.Lock()
 
 
 def devices() -> dict:
     return cfg.setdefault("devices", {})
+
+
+def aliases() -> dict:
+    return cfg.setdefault("device_alias", {})
+
+
+def device_id(request: Request) -> str:
+    """The id of this browser's device record ("" when it has none yet)."""
+    did = request.cookies.get(DEVICE_COOKIE, "")
+    did = aliases().get(did, did)
+    return did if did in devices() else ""
+
+
+def _same_person(a: dict, b: dict) -> bool:
+    return bool(a.get("name")) and social.key_of(a["name"]) == social.key_of(b.get("name", "")) \
+        and a.get("kind") == b.get("kind")
+
+
+def _fold(keep: str, drop: str) -> None:
+    """Make device `drop` the same record as `keep`: its cookie, and any that pointed at it, now
+    lead to `keep`."""
+    devs, al = devices(), aliases()
+    gone = devs.pop(drop, None) or {}
+    k = devs[keep]
+    k["last"] = max(k.get("last", 0), gone.get("last", 0))
+    k["owner"] = bool(k.get("owner") or gone.get("owner"))
+    for cookie, target in list(al.items()):
+        if target == drop:
+            al[cookie] = keep
+    al[drop] = keep
+
+
+def merge_devices() -> int:
+    """Fold records of the same person on the same kind of device into the oldest one, and drop
+    aliases that lead nowhere. Run at start, so doubles from before this rule are tidied too."""
+    with _devices_lock:
+        devs, n = devices(), 0
+        for did in sorted(devs, key=lambda k: devs[k].get("first", 0)):
+            if did not in devs:
+                continue
+            for other in [k for k, v in devs.items() if k != did and _same_person(devs[did], v)]:
+                _fold(did, other)
+                n += 1
+        al = aliases()
+        for cookie in [c for c, target in al.items() if target not in devs]:
+            del al[cookie]
+        if n:
+            save_config(cfg)
+        return n
 
 
 def device_of(request: Request) -> dict | None:
@@ -242,6 +311,18 @@ def rater(request: Request) -> str:
     return d.get("name") or "a friend"
 
 
+def owner_name() -> str:
+    return (cfg.get("owner_names") or ["Jacob"])[0]
+
+
+def who(request: Request) -> str:
+    """This person's name for the things friends see: the feed, votes, hearts, the setlist."""
+    d = device_of(request)
+    if d is None:
+        return owner_name()
+    return d.get("name") or "A friend"
+
+
 def require_owner(request: Request):
     if not is_owner(request):
         raise HTTPException(403, "Only RockWizard's owner can do that")
@@ -253,6 +334,7 @@ def _track_device(request: Request) -> tuple[dict, str | None]:
     now = time.time()
     with _devices_lock:
         devs = devices()
+        did = aliases().get(did, did)
         if did in devs:
             d = devs[did]
             if now - d.get("last", 0) > 60:
@@ -263,6 +345,9 @@ def _track_device(request: Request) -> tuple[dict, str | None]:
             # only the page itself registers a device: a phone's first page load fires several
             # requests at once, which would otherwise each make their own record
             return {"name": "", "owner": False, "kind": ""}, None
+        # scans that never gave a name leave nothing behind
+        for k in [k for k, v in devs.items() if not v.get("name") and now - v.get("last", 0) > UNNAMED_KEEP]:
+            del devs[k]
         did = secrets.token_urlsafe(12)
         agent = request.headers.get("user-agent", "")
         kind = "iPhone" if "iPhone" in agent else "iPad" if "iPad" in agent else "Android" if "Android" in agent \
@@ -276,8 +361,13 @@ def _track_device(request: Request) -> tuple[dict, str | None]:
         return d, did
 
 
+merge_devices()
+
+
 # ---------- app + access ----------
 app = FastAPI(title="RockWizard")
+_seen = {"pc": 0.0}  # when this PC's own window last asked for anything
+_people = {"t": 0.0, "added": {}}  # songs added per person, counted from the libraries now and then
 
 
 @app.middleware("http")
@@ -295,6 +385,8 @@ async def access(request: Request, call_next):
     new_id = None
     if not local:
         request.state.device, new_id = _track_device(request)
+    else:
+        _seen["pc"] = time.time()
     response = await call_next(request)
     if not local and request.query_params.get("key") == cfg["pair_key"]:
         response.set_cookie("rw_key", cfg["pair_key"], max_age=10 * 365 * 86400, samesite="lax")
@@ -306,29 +398,48 @@ async def access(request: Request, call_next):
 @app.get("/api/me")
 def me(request: Request):
     d = device_of(request)
-    return {"local": d is None, "owner": is_owner(request), "name": cfg.get("charter", "") if d is None else d.get("name", "")}
+    name = who(request) if d is None or d.get("name") else ""
+    return {"local": d is None, "owner": is_owner(request), "name": cfg.get("charter", "") if d is None else d.get("name", ""),
+            "who": name, "color": social.color_of(name) if name else "", "colors": social.COLORS}
 
 
 @app.post("/api/me")
 async def set_me(request: Request):
     d = device_of(request)
+    b = await request.json()
+    if "color" in b:  # a person's colour in the feed and on their songs
+        try:
+            social.set_color(who(request), str(b["color"]))
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        if "name" not in b:
+            return me(request)
     if d is None:
         raise HTTPException(400, "This PC is the owner's")
-    name = " ".join(str((await request.json()).get("name", "")).split())[:40]
+    name = " ".join(str(b.get("name", "")).split())[:40]
     if not name:
         raise HTTPException(400, "Please type your name")
-    d["name"] = name
-    # the owner's own name gives full rights on any device (it's among friends)
-    if name.lower() in {n.lower() for n in cfg.setdefault("owner_names", ["Jacob"])}:
-        d["owner"] = True
-    save_config(cfg)
+    with _devices_lock:
+        d["name"] = name
+        # the owner's own name gives full rights on any device (it's among friends)
+        if name.lower() in {n.lower() for n in cfg.setdefault("owner_names", ["Jacob"])}:
+            d["owner"] = True
+        # someone who is already here on this kind of device: the same profile, not a second one
+        mine = next((k for k, v in devices().items() if v is d), "")
+        known = min((k for k, v in devices().items() if v is not d and _same_person(d, v)),
+                    key=lambda k: devices()[k].get("first", 0), default="")
+        if mine and known:
+            devices()[known]["name"] = name  # keeps the spelling just typed
+            _fold(known, mine)
+            request.state.device = devices()[known]
+        save_config(cfg)
     return me(request)
 
 
 @app.get("/api/devices")
 def device_list(request: Request):
     require_owner(request)
-    mine = request.cookies.get(DEVICE_COOKIE, "")
+    mine = device_id(request)
     return [{"id": k, "this": k == mine and device_of(request) is not None, **v}
             for k, v in sorted(devices().items(), key=lambda kv: -kv[1].get("last", 0))]
 
@@ -352,8 +463,11 @@ async def device_set(did: str, request: Request):
 def device_forget(did: str, request: Request):
     """Forget a device: next time it's asked for a name again (it stays paired)."""
     require_owner(request)
-    devices().pop(did, None)
-    save_config(cfg)
+    with _devices_lock:
+        devices().pop(did, None)
+        for cookie in [c for c, target in aliases().items() if target == did]:
+            del aliases()[cookie]
+        save_config(cfg)
     return {"ok": True}
 
 
@@ -377,7 +491,8 @@ async def job_upload(request: Request, file: UploadFile = File(...), artist: str
         shutil.copyfileobj(file.file, f)
     a, t = search.names_from_file(up.stem)
     j = add_job("convert", f"{artist or a} - {title or t}".strip(" -"), CONVERT_STEPS[1:], by=added_by(request),
-                path=str(up), artist=artist or a, title=title or t, charter=charter_of(request))
+                who=who(request), path=str(up), artist=artist or a, title=title or t, charter=charter_of(request))
+    social.log("added", j.who, f"added {j.title}", title=j.title)
     return public(j)
 
 
@@ -405,12 +520,13 @@ async def job_convert(req: Request):
         if not b.get("title"):
             b["artist"], b["title"] = search.names_from_file(Path(b["path"]).stem)
     # a household joke: these artists need the app's popups answered first ("cleared")
-    who = f"{b.get('artist', '')} {extra.get('channel', '')}".lower()
-    if not cfg.get("error_off") and not b.get("cleared") and any(name in who for name in GUARDED_ARTISTS):
+    credit = f"{b.get('artist', '')} {extra.get('channel', '')}".lower()
+    if not cfg.get("error_off") and not b.get("cleared") and any(name in credit for name in GUARDED_ARTISTS):
         return {"gate": "swift", "artist": b.get("artist") or extra.get("channel", ""), "title": b.get("title", "")}
     j = add_job("convert", f"{b.get('artist', '')} - {b.get('title', '')}".strip(" -") or "YouTube song",
-                steps, by=added_by(req), path=b.get("path"), url=b.get("url"), artist=b.get("artist", ""),
+                steps, by=added_by(req), who=who(req), path=b.get("path"), url=b.get("url"), artist=b.get("artist", ""),
                 title=b.get("title", ""), charter=charter_of(req), **extra)
+    social.log("added", j.who, f"added {j.title}", title=j.title)
     return public(j)
 
 
@@ -420,8 +536,10 @@ async def job_update(req: Request):
     b = await req.json()
     out = []
     for f in b.get("folders", []):
-        if library.is_ours(Path(f)):
-            out.append(public(add_job("update", Path(f).name, pipeline.UPDATE_STEPS, folder=f)))
+        f = Path(f)
+        mine = tidy.read_ini(f).get(library.MY_CHART, "0") not in ("", "0") if f.exists() else True
+        if library.is_ours(f) and not mine:  # a chart marked as the owner's own is never remade
+            out.append(public(add_job("update", f.name, pipeline.UPDATE_STEPS, folder=str(f))))
     return out
 
 
@@ -455,6 +573,19 @@ def job_cancel(jid: str, request: Request):
     stops[jid].set()
     if j.status == "queued":
         j.status = "cancelled"
+    return public(j)
+
+
+@app.post("/api/jobs/{jid}/vote")
+def job_vote(jid: str, request: Request):
+    """Friends vote for the waiting songs they want sooner; the most wanted is charted next."""
+    j = jobs.get(jid)
+    if not j:
+        raise HTTPException(404)
+    if j.status != "queued":
+        raise HTTPException(409, "Only waiting songs can be voted on")
+    name = who(request)
+    j.votes.remove(name) if name in j.votes else j.votes.append(name)
     return public(j)
 
 
@@ -559,6 +690,9 @@ async def chart_download(req: Request):
     dest = live_dir() if b.get("to") == "live" and live_dir() and not by else staging_dir()
     saved = search.download_chart(c, dest)
     tidy.write_ini(Path(saved), {library.DOWNLOADED: 1} | ({"chc_added_by": by} if by else {}))
+    _people["t"] = 0
+    social.log("downloaded", who(req), f"downloaded {c.artist} - {c.name}, charted by {c.charter}",
+               title=f"{c.artist} - {c.name}", folder=str(saved))
     return {"saved": str(saved)}
 
 
@@ -576,7 +710,9 @@ def review_dict(folder: Path) -> dict:
 
 def song_summary(folder: Path, with_review=False) -> dict:
     # Clone Hero allows <color=...>/<b> tags in names; show the plain text
-    ini = {k: re.sub(r"</?[a-z]+(=[^>]*)?>", "", v, flags=re.I) for k, v in tidy.read_ini(folder).items()}
+    raw = tidy.read_ini(folder)
+    ini = {k: re.sub(r"</?[a-z]+(=[^>]*)?>", "", v, flags=re.I) for k, v in raw.items()}
+    names = (raw["artist"], raw["name"]) if raw.get("artist") and raw.get("name") else library.names_of(folder)
     r = _reviews.get(str(folder))
     mtime = (folder / "notes.mid").stat().st_mtime if (folder / "notes.mid").exists() else folder.stat().st_mtime
     if with_review and (r is None or r.get("mtime") != mtime):
@@ -589,7 +725,7 @@ def song_summary(folder: Path, with_review=False) -> dict:
             "genre": ini.get("genre", ""), "charter": ini.get("charter", ""), "added_by": ini.get("chc_added_by", ""),
             "stems": [p.stem for p in folder.iterdir() if p.suffix.lower() in (".ogg", ".opus", ".mp3")],
             "modified": mtime, "verdict": r["verdict"] if r else None,
-            "mine": ini.get(library.MY_CHART, "0") not in ("", "0"),
+            "mine": ini.get(library.MY_CHART, "0") not in ("", "0"), "key": social.song_key(*names),
             "downloaded": ini.get(library.DOWNLOADED, "0") not in ("", "0")} | feedback.of(ini)
 
 
@@ -609,7 +745,8 @@ def staging_list(review_all: bool = False):
 @app.get("/api/staging/review")
 def staging_review(folder: str):
     f = body_folder(folder)
-    return song_summary(f) | review_dict(f) | {"ours": library.is_ours(f), "rechart": rechart.options(f)}
+    ours = library.is_ours(f)
+    return song_summary(f) | review_dict(f) | {"ours": ours, "rechart": rechart.options(f)} | (version_of(f) if ours else {})
 
 
 @app.post("/api/staging/status")
@@ -626,7 +763,14 @@ async def staging_publish(req: Request):
     b = await req.json()
     if not live_dir():
         raise HTTPException(400, "Set the live folder (Quickplay) in Settings first")
-    ok, msg, dest = review.publish(body_folder(b["folder"]), live_dir(), bool(b.get("force")))
+    src = body_folder(b["folder"])
+    a, t = library.names_of(src)
+    by = tidy.read_ini(src).get("chc_added_by", "")
+    ok, msg, dest = review.publish(src, live_dir(), bool(b.get("force")))
+    if ok:
+        _people["t"] = 0
+        social.log("published", who(req), f"published {a} - {t} to Quickplay", title=f"{a} - {t}".strip(" -"),
+                   folder=str(dest), **({"for": by} if by else {}))
     return {"ok": ok, "message": msg, "folder": str(dest) if dest else None}
 
 
@@ -811,7 +955,8 @@ def live_list():
 @app.get("/api/live/song")
 def live_song(folder: str):
     f = body_folder(folder)
-    return song_summary(f) | {"ours": library.is_ours(f), "rechart": rechart.options(f)}
+    ours = library.is_ours(f)
+    return song_summary(f) | {"ours": ours, "rechart": rechart.options(f)} | (version_of(f) if ours else {})
 
 
 @app.post("/api/song/mine")
@@ -895,11 +1040,20 @@ async def song_rating(req: Request):
 
 
 # ---------- library ----------
+def version_of(f: Path) -> dict:
+    """What charted a song this app made, whether it is behind the app's models and charting today,
+    and whether it was changed by hand (then it is left alone unless picked)."""
+    ini = tidy.read_ini(f)
+    return {"version": version.describe(ini), "edited": library.hand_edited(f),
+            "mine": ini.get(library.MY_CHART, "0") not in ("", "0")}
+
+
 @app.get("/api/library/ours")
 def library_ours(request: Request, folder: str = ""):
     require_owner(request)
     root = Path(folder) if folder else staging_dir()
-    return {"folder": str(root), "songs": [song_summary(p) for p in library.song_folders(root) if library.is_ours(p)]}
+    songs = [song_summary(p) | version_of(p) for p in library.song_folders(root) if library.is_ours(p)]
+    return {"folder": str(root), "songs": songs, "engine": version.ENGINE, "engines": version.ENGINES}
 
 
 @app.get("/api/library/batch")
@@ -1057,7 +1211,7 @@ def pairing_reset(request: Request):
     require_owner(request)
     cfg["pair_key"] = secrets.token_urlsafe(16)
     save_config(cfg)
-    return pairing()
+    return pairing(request)
 
 
 def syncthing_status() -> dict | None:
@@ -1123,7 +1277,177 @@ def status():
         training = {"last": last, "running": lock.exists() and "done" not in last.split(" ")[-8:]}
     busy = any(j.status == "running" for j in jobs.values())
     queued = sum(1 for j in jobs.values() if j.status == "queued")
-    return {"busy": busy, "queued": queued, "training": training, "sync": syncthing_status()}
+    return {"busy": busy, "queued": queued, "training": training, "sync": syncthing_status(),
+            "activity": social.last_id(), "social": social.rev()}
+
+
+# ---------- friends: feed, people, hearts, setlist ----------
+@app.get("/api/activity")
+def activity(after: int = 0):
+    return {"events": [e | {"color": social.color_of(e["who"])} for e in social.events(after)], "last": social.last_id()}
+
+
+SHAME_TEXT = {"pass": "got past the Taylor Swift checkpoint", "fail": "failed the Taylor Swift quiz",
+              "timeout": "ran out of time on the Taylor Swift quiz"}
+
+
+@app.post("/api/shame")
+async def shame(req: Request):
+    """The Taylor Swift checkpoint reports in: 'gate' when it starts, then pass, fail or timeout."""
+    event = str((await req.json()).get("event", ""))
+    try:
+        row = social.shame(who(req), event)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    if event in SHAME_TEXT:
+        social.log("shame", who(req), SHAME_TEXT[event], outcome=event)
+    return row
+
+
+def added_counts() -> dict:
+    """name key -> {"n": songs they added, "artists": {artist: n}}, from song.ini in staging and
+    Quickplay. Counted at most once a minute: it reads every song.ini."""
+    if time.time() - _people["t"] < 60:
+        return _people["added"]
+    out = {}
+    for root in (staging_dir(), live_dir()):
+        if not root or not root.exists():
+            continue
+        for f in library.song_folders(root):
+            ini = tidy.read_ini(f)
+            by = ini.get("chc_added_by", "")
+            if not by and ini.get(library.MARKER, "0") in ("", "0"):
+                continue  # someone else's chart that nobody here added
+            row = out.setdefault(social.key_of(by or owner_name()), {"n": 0, "artists": {}})
+            row["n"] += 1
+            artist = ini.get("artist", "").strip()
+            if artist:
+                row["artists"][artist] = row["artists"].get(artist, 0) + 1
+    _people.update(t=time.time(), added=out)
+    return out
+
+
+@app.get("/api/names")
+def names():
+    """The friends already here, for the welcome box: tap your name in place of typing it again.
+    The owner's names are left out: a tap on one would hand over the owner's rights."""
+    seen, owners = {}, {social.key_of(n) for n in cfg.get("owner_names") or ["Jacob"]}
+    owners |= {social.key_of(d.get("name", "")) for d in devices().values() if d.get("owner")}
+    for d in sorted(devices().values(), key=lambda d: -d.get("last", 0)):
+        if d.get("name") and social.key_of(d["name"]) not in owners:
+            seen.setdefault(social.key_of(d["name"]), d["name"])
+    return [{"name": n, "color": social.color_of(n)} for n in seen.values()]
+
+
+@app.get("/api/people")
+def people(request: Request):
+    now, rows = time.time(), {}
+    rows[social.key_of(owner_name())] = {"name": owner_name(), "owner": True, "last": _seen["pc"]}
+    for d in devices().values():
+        if not d.get("name"):
+            continue
+        r = rows.setdefault(social.key_of(d["name"]), {"name": d["name"], "owner": False, "last": 0})
+        r["owner"] = r["owner"] or bool(d.get("owner"))
+        r["last"] = max(r["last"], d.get("last", 0))
+    added = added_counts()
+    me_key = social.key_of(who(request))
+    out = []
+    for k, r in rows.items():
+        a = added.get(k) or {"n": 0, "artists": {}}
+        top = max(a["artists"].items(), key=lambda kv: kv[1], default=("", 0))
+        out.append(r | {"color": social.color_of(r["name"]), "online": now - r["last"] < 150, "me": k == me_key,
+                        "added": a["n"], "top_artist": top[0], "top_count": top[1],
+                        "hearts": len(social.hearts_of(r["name"])), "shame": social.shame_of(r["name"])})
+    return sorted(out, key=lambda r: (-r["added"], r["name"].lower()))
+
+
+def song_ref(folder: str) -> tuple[Path, str, str, str]:
+    """(folder, artist, title, key) of a song in staging or Quickplay."""
+    f = body_folder(folder).resolve()
+    if not any(r.resolve() in f.parents for r in (staging_dir(), live_dir()) if r):
+        raise HTTPException(400, "Only songs in staging or Quickplay")
+    a, t = library.names_of(f)
+    return f, a, t, social.song_key(a, t)
+
+
+@app.get("/api/hearts")
+def hearts(request: Request):
+    return {"mine": social.hearts_of(who(request)), "counts": social.heart_counts()}
+
+
+@app.post("/api/hearts")
+async def heart(req: Request):
+    _, _, _, key = song_ref((await req.json())["folder"])
+    on = social.heart_toggle(who(req), key)
+    return {"on": on, "key": key, "count": social.heart_counts().get(key, 0)}
+
+
+def setlist_rows() -> list[dict]:
+    rows = social.setlist()
+    for s in rows:
+        f = Path(s["folder"])
+        s["here"] = f.exists()
+        s["has_cover"] = s["here"] and ((f / "album.jpg").exists() or (f / "album.png").exists())
+        s["color"] = social.color_of(s["by"])
+    return rows
+
+
+@app.get("/api/setlist")
+def setlist_get():
+    return {"songs": setlist_rows()}
+
+
+@app.post("/api/setlist/add")
+async def setlist_add(req: Request):
+    f, a, t, key = song_ref((await req.json())["folder"])
+    if not social.setlist_add(key, str(f), t or f.name, a, who(req)):
+        raise HTTPException(409, "That song is already on tonight's setlist")
+    social.log("setlist", who(req), f"put {a} - {t} on tonight's setlist", title=f"{a} - {t}".strip(" -"))
+    return {"songs": setlist_rows()}
+
+
+@app.post("/api/setlist/update")
+async def setlist_update(req: Request):
+    """{key, played} ticks a song off, {key, move: -1|1} reorders (owner), {key, remove} takes it
+    off (whoever added it, or the owner), {clear: "all"|"played"} empties the list (owner)."""
+    b = await req.json()
+    if b.get("clear"):
+        require_owner(req)
+        social.setlist_clear(played_only=b["clear"] == "played")
+        return {"songs": setlist_rows()}
+    s = social.setlist_get(str(b.get("key", "")))
+    if not s:
+        raise HTTPException(404, "That song isn't on the setlist any more")
+    if "played" in b:
+        social.setlist_played(s["key"], bool(b["played"]))
+    if b.get("move"):
+        require_owner(req)
+        social.setlist_move(s["key"], 1 if int(b["move"]) > 0 else -1)
+    if b.get("remove"):
+        if not is_owner(req) and social.key_of(s["by"]) != social.key_of(who(req)):
+            raise HTTPException(403, "You can only take off songs you put on")
+        social.setlist_remove(s["key"])
+    return {"songs": setlist_rows()}
+
+
+@app.get("/api/chart")
+def chart_notes(folder: str):
+    """The Expert notes of a song in staging or Quickplay, for the note highway."""
+    f, a, t, _ = song_ref(folder)
+    try:
+        return preview.notes(f) | {"artist": a, "title": t}
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
+    except Exception as e:
+        raise HTTPException(422, f"This chart can't be shown: {e}")
+
+
+@app.get("/api/invite")
+def invite(request: Request):
+    """The pairing QR for the owner; friends are told who to ask."""
+    if not is_owner(request):
+        return {"owner": owner_name(), "urls": [], "qr": ""}
+    return pairing(request) | {"owner": owner_name()}
 
 
 # ---------- web app ----------

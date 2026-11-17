@@ -28,8 +28,10 @@ def model_tag(kind: str) -> str:
     return _tags[k]
 
 
-def load(kind: str, device="cuda"):
-    """kind is the instrument ('guitar'); the model file says which features it was trained on."""
+def load(kind: str, device=None):
+    """kind is the instrument ('guitar'); the model file says which features it was trained on.
+    On the graphics card when there is one, else the CPU."""
+    device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     if kind not in _cache:
         ck = torch.load(MODEL_DIR / f"{kind}.pt", map_location=device, weights_only=False)
         fkind = ck.get("kind", kind)
