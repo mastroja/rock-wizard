@@ -35,7 +35,7 @@ def _d() -> dict:
         except (OSError, ValueError):
             _data = {}
         for key, empty in (("events", []), ("next_id", 1), ("rev", 0), ("profiles", {}), ("shame", {}),
-                           ("hearts", {}), ("setlist", []), ("bands", {}), ("gigs", {})):
+                           ("hearts", {}), ("setlist", []), ("bands", {}), ("gigs", {}), ("scores", {})):
             _data.setdefault(key, empty)
     return _data
 
@@ -536,3 +536,56 @@ def gig_edit(gid: str, op: str, **a) -> None:
         else:
             raise ValueError("unknown change")
         _save()
+
+
+# ---------- scores ----------
+# {name key: {"<song key>|<instrument>|<difficulty>": {"key", "artist", "title", "inst", "diff", "pct", "t", "tries"}}}:
+# each person's best percentage on a song, per instrument and difficulty (with how often they've logged it).
+DIFFS = ("easy", "medium", "hard", "expert")
+
+
+def score_add(name: str, key: str, artist: str, title: str, inst: str, diff: str, pct) -> dict:
+    """Log a score; only the best is kept. {"best": a new best?, "was": the old best or None, "pct"}."""
+    if inst not in INSTRUMENTS:
+        raise ValueError("Pick an instrument")
+    if diff not in DIFFS:
+        raise ValueError("Pick a difficulty")
+    try:
+        pct = round(float(pct), 1)
+    except (TypeError, ValueError):
+        raise ValueError("The percentage should be a number")
+    if not 0 <= pct <= 100:
+        raise ValueError("The percentage should be from 0 to 100")
+    pct = int(pct) if pct == int(pct) else pct
+    with _lock:
+        mine = _d()["scores"].setdefault(key_of(name), {})
+        k = f"{key}|{inst}|{diff}"
+        old = mine.get(k)
+        best = old is None or pct > old["pct"]
+        if best:
+            mine[k] = {"key": key, "artist": artist, "title": title, "inst": inst, "diff": diff, "pct": pct, "by": name,
+                       "t": time.time(), "tries": (old or {}).get("tries", 0) + 1}
+        else:
+            old["tries"] = old.get("tries", 1) + 1
+        _save()
+        return {"best": best, "was": old["pct"] if old else None, "pct": pct}
+
+
+def scores_of(name: str) -> list[dict]:
+    with _lock:
+        return [dict(s) for s in (_d()["scores"].get(key_of(name)) or {}).values()]
+
+
+def score_remove(name: str, key: str, inst: str, diff: str) -> None:
+    with _lock:
+        if (_d()["scores"].get(key_of(name)) or {}).pop(f"{key}|{inst}|{diff}", None) is None:
+            raise KeyError("That score is already gone")
+        _save()
+
+
+def song_scores(key: str) -> list[dict]:
+    """Everyone's best on one song: [{"name", "inst", "diff", "pct", "t"}], best first."""
+    with _lock:
+        out = [{"name": s.get("by") or who, "inst": s["inst"], "diff": s["diff"], "pct": s["pct"], "t": s["t"]}
+               for who, mine in _d()["scores"].items() for s in mine.values() if s["key"] == key]
+    return sorted(out, key=lambda s: (-DIFFS.index(s["diff"]), -s["pct"], s["t"]))

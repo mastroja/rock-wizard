@@ -894,7 +894,9 @@ async function openReview(folder, live = false) {
       <button class="btn" id="watch">${ICON.play} Watch the chart</button>
       <button class="btn${S.hearts.mine.has(s.key) ? " hearted" : ""}" id="heartbtn">${HEART}<span>${S.hearts.mine.has(s.key) ? "Favourite" : "Add to favourites"}</span></button>
       ${live ? `<button class="btn" id="setadd">+ Tonight's setlist</button>` : ""}
-      <button class="btn" id="bandadd">+ Band set list</button></div>
+      <button class="btn" id="bandadd">+ Band set list</button>
+      <button class="btn" id="scorelog">+ Log a score</button></div>
+    <details class="card fold" id="scorefold"><summary><h2>Scores</h2> <span class="faint" id="scoresum"></span></summary><div id="scorelist"><div class="empty"><span class="spinner"></span></div></div></details>
     ${owner() ? `<div class="card next"><h2>${live ? "Actions" : "Next"}</h2>
       ${live ? "" : `<div class="row">
         <button class="btn primary grow" id="pub">${ICON.rocket} Publish to live</button>
@@ -936,6 +938,15 @@ async function openReview(folder, live = false) {
     catch (err) { toast(err.message); }
   };
   $("#bandadd", dr).onclick = () => pickSetlist(s);
+  const loadScores = async () => {
+    const box = $("#scorelist", dr); if (!box) return;
+    try { box.innerHTML = await songScoresHTML(s.folder); } catch (e) { box.innerHTML = `<p class="chip red">${esc(e.message)}</p>`; return; }
+    const n = $$(".scorerow", box).length, sum = $("#scoresum", dr);
+    if (sum) sum.textContent = n ? plural(n, "score") : "None yet";
+    if (n) $("#scorefold", dr).open = true;
+  };
+  loadScores();
+  $("#scorelog", dr).onclick = () => logScore(s, loadScores);
   const refreshAfter = (folder2) => { openReview(folder2, live); if (view() === "staging") renderStaging(); if (view() === "live") renderLive(); };
   const lrm = $("#liveremove", dr);
   if (lrm) lrm.onclick = async () => {
@@ -1423,7 +1434,7 @@ async function socialTick(st) {
 // ---------- party: feed, tonight's setlist, people, invite ----------
 let partyTab = "feed";
 const KIND = { added: ["", "Added"], ready: ["green", "Ready"], failed: ["red", "Failed"], published: ["accent", "Live"],
-  downloaded: ["", "Download"], shame: ["yellow", "Shame"], setlist: ["accent", "Setlist"], band: ["accent", "Band"], gig: ["red", "Gig"] };
+  downloaded: ["", "Download"], shame: ["yellow", "Shame"], setlist: ["accent", "Setlist"], band: ["accent", "Band"], gig: ["red", "Gig"], score: ["green", "Score"] };
 
 async function renderParty(keep = false) {
   if (!keep || !$("#pbody")) {
@@ -1956,7 +1967,7 @@ let prof = { name: "", shown: 60, q: "", where: "all" };
 
 async function renderProfile() {
   const name = hashArg("name");
-  if (pkey(name) !== pkey(prof.name)) prof = { name, shown: 60, q: "", where: "all" };
+  if (pkey(name) !== pkey(prof.name)) prof = { name, shown: 60, q: "", where: "all", sinst: "all", ssort: "best", sshown: 15 };
   if (lastPage !== name) page(esc(name), "", `<div class="empty"><span class="spinner"></span></div>`);
   let p;
   try { [p] = await Promise.all([api("/api/profile?" + qs({ name })), S.peopleList.length ? null : loadPeople()]); }
@@ -1968,12 +1979,20 @@ async function renderProfile() {
       <div class="grow" style="min-width:0">
         <div class="row wrap" style="gap:8px"><h2 style="margin:0">${esc(p.name)}</h2>${p.me ? `<span class="faint">(you)</span>` : ""}${p.owner ? `<span class="chip accent">Host</span>` : ""}</div>
         <div class="faint">${p.online ? "Here now" : p.last ? `Last here ${since(p.last)}` : "Not seen yet"}</div>
-        <div class="stats"><span><b>${p.songs.length}</b> songs added</span><span><b>${p.hearts}</b> favourites</span><span><b>${p.bands.length}</b> ${p.bands.length === 1 ? "band" : "bands"}</span></div>
+        <div class="stats"><span><b>${p.songs.length}</b> songs added</span>${p.scores.length ? `<span><b>${p.scores.length}</b> ${p.scores.length === 1 ? "score" : "scores"}</span>` : ""}<span><b>${p.hearts}</b> favourites</span><span><b>${p.bands.length}</b> ${p.bands.length === 1 ? "band" : "bands"}</span></div>
         ${p.me ? `<div class="row wrap" style="gap:8px;margin-top:12px"><button class="btn small" id="profav">${p.avatar || p.photo ? "Edit avatar" : "Make an avatar"}</button></div>` : ""}
       </div></div>
     <div class="card"><h2>Bands</h2>${p.bands.length ? `<div class="row wrap" style="gap:10px">${p.bands.map((b) =>
       `<button class="bandchip" data-band="${esc(b.id)}"><span class="bandlogo tiny">${bandArt(b)}</span><b>${esc(b.name)}</b><span class="avstack">${b.members.slice(0, 5).map((m) => avatar(m, "", "", false)).join("")}</span></button>`).join("")}</div>`
       : `<div class="faint">${p.me ? "Not in a band yet." : `${esc(p.name)} isn't in a band yet.`} <a href="#party" id="tobands">${p.me ? "Start one in Party &rarr; Bands" : "See the bands"}</a></div>`}</div>
+    <div class="card"><div class="row spread wrap" style="gap:10px"><h2 style="margin:0">Scores</h2>${p.me ? `<button class="btn small primary" id="scoreadd">+ Log a score</button>` : ""}</div>
+      ${p.scores.length ? `<div class="faint" style="margin:6px 0 10px">Averages of ${p.me ? "your" : "their"} best on each song</div>${scoreGridHTML(p.scores)}
+        <div class="row spread wrap" style="gap:10px;margin:18px 0 6px"><h3 style="margin:0">Top performances</h3>
+          <div class="row wrap" style="gap:8px"><div class="tabs">${["all", ...INSTS.filter((i) => p.scores.some((x) => x.inst === i))].map((k) =>
+            `<button class="${prof.sinst === k ? "on" : ""}" data-sinst="${k}">${k === "all" ? "All" : cap(k)}</button>`).join("")}</div>
+          <div class="tabs">${[["best", "Best"], ["new", "Newest"]].map(([k, l]) => `<button class="${prof.ssort === k ? "on" : ""}" data-ssort="${k}">${l}</button>`).join("")}</div></div></div>
+        <div id="profscores"></div>`
+      : `<div class="empty">${p.me ? "No scores yet. Played a song in Clone Hero? Log your percentage here, or from the song's page." : `${esc(p.name)} hasn't logged any scores yet.`}</div>`}</div>
     <div class="card"><div class="row spread wrap" style="gap:10px;margin-bottom:6px"><h2 style="margin:0">Songs added</h2>
         <div class="tabs">${[["all", `All ${p.songs.length}`], ["quickplay", `Quickplay ${n("quickplay")}`], ["staging", `Staging ${n("staging")}`]].map(([k, l]) =>
           `<button class="${prof.where === k ? "on" : ""}" data-pw="${k}">${l}</button>`).join("")}</div></div>
@@ -1991,10 +2010,129 @@ async function renderProfile() {
     const more = $("#profmore"); if (more) more.onclick = () => { prof.shown += 60; draw(); };
   };
   draw();
+  const drawScores = () => {
+    const box = $("#profscores"); if (!box) return;
+    const rows = p.scores.filter((x) => prof.sinst === "all" || x.inst === prof.sinst)
+      .sort(prof.ssort === "new" ? (a, b) => b.t - a.t : (a, b) => b.pct - a.pct || DIFFS.indexOf(b.diff) - DIFFS.indexOf(a.diff) || b.t - a.t);
+    box.innerHTML = rows.slice(0, prof.sshown).map((x, i) => `<div class="item scorerow${x.here ? " link" : ""}" ${x.here ? `data-ssong="${esc(x.folder)}" data-where="${x.where}"` : ""}>
+        <span class="setno">${prof.ssort === "best" ? i + 1 : ""}</span>${coverHTML(x, "setcover", 120)}
+        <div class="grow" style="min-width:0"><div class="t ellipsis">${esc(x.title || "Unknown song")}</div><div class="faint ellipsis">${esc(x.artist || "Unknown artist")}</div>
+          <div class="row wrap" style="gap:6px;margin-top:5px"><span class="chip">${cap(x.diff)} ${x.inst}</span>${x.tries > 1 ? `<span class="faint">${x.tries} tries</span>` : ""}${x.here ? "" : `<span class="chip red">Song gone</span>`}</div></div>
+        <div class="pctcol"><b style="color:${pctColor(x.pct)}">${pctTxt(x.pct)}</b>${pctBar(x.pct)}<span class="faint">${since(x.t)}</span></div>
+        ${p.me ? `<button class="btn small ghost" data-srm="${i}" title="Remove this score" aria-label="Remove this score">&times;</button>` : ""}</div>`).join("")
+      + (rows.length > prof.sshown ? `<div style="text-align:center;margin-top:12px"><button class="btn small" id="smore">Show more (${rows.length - prof.sshown} left)</button></div>` : "");
+    $$("[data-ssong]", box).forEach((r) => r.onclick = (e) => { if (!e.target.closest("[data-srm]")) openReview(r.dataset.ssong, r.dataset.where === "quickplay"); });
+    $$("[data-srm]", box).forEach((b) => b.onclick = async (e) => {
+      e.stopPropagation();
+      const x = rows[b.dataset.srm];
+      if (!confirm(`Remove your ${pctTxt(x.pct)} on ${cap(x.diff)} ${x.inst} for “${x.title}”?`)) return;
+      try { await post("/api/scores/remove", { key: x.key, inst: x.inst, diff: x.diff }); renderProfile(); } catch (err) { toast(err.message); }
+    });
+    const more = $("#smore"); if (more) more.onclick = () => { prof.sshown += 15; drawScores(); };
+  };
+  drawScores();
+  $$("[data-sinst]").forEach((b) => b.onclick = () => { prof.sinst = b.dataset.sinst; prof.sshown = 15; $$("[data-sinst]").forEach((y) => y.classList.toggle("on", y === b)); drawScores(); });
+  $$("[data-ssort]").forEach((b) => b.onclick = () => { prof.ssort = b.dataset.ssort; $$("[data-ssort]").forEach((y) => y.classList.toggle("on", y === b)); drawScores(); });
+  const sa = $("#scoreadd"); if (sa) sa.onclick = () => logScore(null, renderProfile);
   $("#profq").oninput = (e) => { prof.q = e.target.value; prof.shown = 60; draw(); };
   $$("[data-pw]").forEach((b) => b.onclick = () => { prof.where = b.dataset.pw; $$("[data-pw]").forEach((x) => x.classList.toggle("on", x === b)); draw(); });
   const av = $("#profav"); if (av) av.onclick = () => editAvatar(renderProfile);
   const tb = $("#tobands"); if (tb) tb.onclick = () => { partyTab = "bands"; };
+}
+
+// ---------- scores: your best percentage per song, instrument and difficulty ----------
+const DIFFS = ["easy", "medium", "hard", "expert"], INSTS = ["guitar", "bass", "drums", "vocals"];
+const cap = (s) => s ? s[0].toUpperCase() + s.slice(1) : "";
+const pctTxt = (p) => `${+(+p).toFixed(1)}%`;
+const pctColor = (p) => p >= 98 ? "#facc15" : p >= 90 ? "var(--good)" : p >= 75 ? "#a3e635" : p >= 60 ? "#fb923c" : "var(--bad)";
+const pctBar = (p) => `<span class="pctbar"><i style="width:${Math.max(2, +p)}%;background:${pctColor(p)}"></i></span>`;
+const avgOf = (rows) => rows.length ? rows.reduce((t, s) => t + +s.pct, 0) / rows.length : null;
+
+// pick a song (when none is given), then the instrument, difficulty and percentage
+function logScore(song, after) {
+  let last = {};
+  try { last = JSON.parse(localStorage.getItem("score_last")) || {}; } catch (e) { /* defaults */ }
+  const st = { song, picked: !song, inst: INSTS.includes(last.inst) ? last.inst : "guitar", diff: DIFFS.includes(last.diff) ? last.diff : "expert", q: "", hits: null, pct: "" };
+  const scrim = document.createElement("div"); scrim.className = "scrim pop";
+  const m = document.createElement("div"); m.className = "modal card pop scoremodal";
+  const close = () => { scrim.remove(); m.remove(); };
+  scrim.onclick = close;
+  document.body.append(scrim, m);
+  let t;
+  const find = async () => {
+    const q = st.q.trim();
+    try { st.hits = await api("/api/songs/find?" + qs({ q, limit: 25 })); } catch (e) { st.hits = []; }
+    if (m.isConnected && !st.song) drawHits();
+  };
+  const drawHits = () => {
+    const box = $("#schits", m); if (!box) return;
+    box.innerHTML = st.hits === null ? `<div class="empty"><span class="spinner"></span></div>` : st.hits.length
+      ? st.hits.map((s, i) => `<div class="item link" data-hit="${i}">${coverHTML(s, "setcover", 120)}<div class="grow" style="min-width:0"><div class="t ellipsis">${esc(s.title || s.name)}</div><div class="faint ellipsis">${esc(s.artist || "Unknown artist")}</div></div></div>`).join("")
+      : `<div class="empty">No songs match.</div>`;
+    $$("[data-hit]", box).forEach((r) => r.onclick = () => { st.song = st.hits[r.dataset.hit]; draw(); });
+  };
+  const draw = () => {
+    const s = st.song;
+    m.innerHTML = `<div class="row spread"><h2 style="margin:0">Log a score</h2><button class="btn small" id="scx">Close</button></div>
+      ${!s ? `<p class="faint">Which song did you play?</p><input id="scq" type="search" placeholder="Search Quickplay and staging" value="${esc(st.q)}" style="width:100%">
+        <div id="schits" class="schits"></div>`
+      : `<div class="item scsong">${coverHTML(s, "setcover", 120)}<div class="grow" style="min-width:0"><div class="t ellipsis">${esc(s.title || s.name)}</div><div class="faint ellipsis">${esc(s.artist || "Unknown artist")}</div></div>
+          ${st.picked ? `<button class="btn small" id="scchange">Change</button>` : ""}</div>
+        <div class="faint scl">Instrument</div><div class="tabs">${INSTS.map((k) => `<button class="${st.inst === k ? "on" : ""}" data-si="${k}">${cap(k)}</button>`).join("")}</div>
+        <div class="faint scl">Difficulty</div><div class="tabs">${DIFFS.map((k) => `<button class="${st.diff === k ? "on" : ""}" data-sd="${k}">${cap(k)}</button>`).join("")}</div>
+        <div class="faint scl">Percentage</div><div class="row" style="gap:10px;align-items:center"><input id="scpct" class="pctin" type="number" min="0" max="100" step="0.1" inputmode="decimal" placeholder="0" value="${esc(st.pct)}"><b class="pctsign">%</b>
+          <span class="grow"></span><button class="btn primary" id="scsave">Save score</button></div>
+        <p class="faint" style="margin-bottom:0">Only your best on each instrument and difficulty is kept.</p>`}`;
+    $("#scx", m).onclick = close;
+    if (!s) {
+      const q = $("#scq", m); q.focus();
+      q.oninput = () => { st.q = q.value; clearTimeout(t); t = setTimeout(find, 200); };
+      if (st.hits === null) find(); else drawHits();
+      return;
+    }
+    const ch = $("#scchange", m); if (ch) ch.onclick = () => { st.song = null; draw(); };
+    $$("[data-si]", m).forEach((b) => b.onclick = () => { st.inst = b.dataset.si; draw(); });
+    $$("[data-sd]", m).forEach((b) => b.onclick = () => { st.diff = b.dataset.sd; draw(); });
+    const pin = $("#scpct", m), save = $("#scsave", m);
+    pin.oninput = () => { st.pct = pin.value; };
+    pin.onkeydown = (e) => { if (e.key === "Enter") save.click(); };
+    if (window.matchMedia("(pointer: fine)").matches) pin.focus();
+    save.onclick = async () => {
+      const pct = parseFloat(st.pct);
+      if (!(pct >= 0 && pct <= 100)) { toast("Type a percentage from 0 to 100"); pin.focus(); return; }
+      save.disabled = true;
+      try {
+        const r = await post("/api/scores", { folder: s.folder, inst: st.inst, diff: st.diff, pct });
+        try { localStorage.setItem("score_last", JSON.stringify({ inst: st.inst, diff: st.diff })); } catch (e) { /* not kept */ }
+        close();
+        if (r.best) { toast(r.was === null ? `Score saved: ${pctTxt(r.pct)}` : `New best! Up from ${pctTxt(r.was)}`); if (r.was !== null || r.pct >= 100) confetti(); }
+        else toast(`Saved. Your best there is still ${pctTxt(r.was)}`);
+        if (after) after();
+      } catch (e) { save.disabled = false; toast(e.message); }
+    };
+  };
+  draw();
+}
+
+// the drawer's list: everyone's best on this song
+async function songScoresHTML(folder) {
+  const rows = await api("/api/scores/song?" + qs({ folder }));
+  return rows.length ? rows.map((r) => `<div class="item scorerow${pkey(r.name) === pkey(S.me.who) ? " me" : ""}">${avatar(r.name, "", "", true)}
+      <div class="grow" style="min-width:0"><b class="link" data-user="${esc(r.name)}">${esc(r.name)}</b><div class="faint">${cap(r.diff)} ${r.inst}</div></div>
+      <div class="pctcol"><b style="color:${pctColor(r.pct)}">${pctTxt(r.pct)}</b>${pctBar(r.pct)}</div></div>`).join("")
+    : `<div class="empty">No scores on this song yet. Played it? Log yours.</div>`;
+}
+
+// a profile's averages: instrument by difficulty, from their best on each song
+function scoreGridHTML(scores) {
+  const cell = (rows, cls = "") => { const a = avgOf(rows);
+    return a === null ? `<span class="sgc empty${cls}">–</span>` : `<span class="sgc${cls}"><b style="color:${pctColor(a)}">${pctTxt(a)}</b><small>${plural(rows.length, "song")}</small></span>`; };
+  const of = (inst, diff) => scores.filter((s) => (!inst || s.inst === inst) && (!diff || s.diff === diff));
+  const insts = INSTS.filter((i) => of(i).length);
+  return `<div class="scoregrid" style="grid-template-columns:minmax(64px,auto) repeat(${DIFFS.length + 1},1fr)">
+    <span></span>${DIFFS.map((d) => `<span class="sgh">${cap(d)}</span>`).join("")}<span class="sgh">All</span>
+    ${insts.map((i) => `<span class="sgr">${cap(i)}</span>${DIFFS.map((d) => cell(of(i, d))).join("")}${cell(of(i), " tot")}`).join("")}
+    ${insts.length > 1 ? `<span class="sgr">All</span>${DIFFS.map((d) => cell(of(null, d), " tot")).join("")}${cell(scores, " tot all")}` : ""}</div>`;
 }
 
 // ---------- bands ----------

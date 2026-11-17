@@ -1498,7 +1498,7 @@ def profile(name: str, request: Request):
         raise HTTPException(404, f"Nobody called {name} has been here")
     mine = [{"id": b["id"], "name": b["name"], "members": b["members"], "logo": b.get("logo"), "image": b.get("image", 0)}
             for b in social.bands() if social.is_member(b, p["name"])]
-    return p | {"songs": songs, "bands": mine}
+    return p | {"songs": songs, "bands": mine, "scores": _scores_out(social.scores_of(p["name"]))}
 
 
 @app.get("/api/songs/find")
@@ -1868,6 +1868,49 @@ def song_ref(folder: str) -> tuple[Path, str, str, str]:
         raise HTTPException(400, "Only songs in staging or Quickplay")
     a, t = library.names_of(f)
     return f, a, t, social.song_key(a, t)
+
+
+# ---------- scores: each person's best percentage per song, instrument and difficulty ----------
+def _scores_out(rows: list[dict]) -> list[dict]:
+    """Scores with their song found in the libraries again (cover, folder), when it's still there."""
+    index = _song_lookup()
+    out = []
+    for s in rows:
+        r = index.get(s["key"])
+        out.append(s | ({k: r[k] for k in ("folder", "where", "has_cover", "cover_v")} | {"here": True} if r else {"here": False, "has_cover": False}))
+    return out
+
+
+@app.post("/api/scores")
+async def score_add(req: Request):
+    """Log a score on a song: {folder, inst, diff, pct}. Only a new best replaces the old one."""
+    b = await req.json()
+    _, a, t, key = song_ref(b.get("folder", ""))
+    name = who(req)
+    try:
+        r = social.score_add(name, key, a, t, b.get("inst", ""), b.get("diff", ""), b.get("pct"))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    if r["best"]:
+        social.log("score", name, f"scored {r['pct']}% on {b['diff'].title()} {b['inst']}: {t or a}",
+                   folder=str(body_folder(b["folder"])), pct=r["pct"])
+    return r
+
+
+@app.post("/api/scores/remove")
+async def score_remove(req: Request):
+    b = await req.json()
+    try:
+        social.score_remove(who(req), b.get("key", ""), b.get("inst", ""), b.get("diff", ""))
+    except KeyError as e:
+        raise HTTPException(404, str(e.args[0]))
+    return {"ok": True}
+
+
+@app.get("/api/scores/song")
+def song_scores(folder: str):
+    """Everyone's best on one song."""
+    return social.song_scores(song_ref(folder)[3])
 
 
 @app.get("/api/hearts")
