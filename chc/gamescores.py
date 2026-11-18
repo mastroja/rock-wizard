@@ -8,6 +8,7 @@ linked to a person here (server.import_game_scores); its scores are logged as th
 Only instruments the Scores page has are read (guitar, bass, drums, vocals), and plays with bots,
 replays or slowed down songs are left out. A score is logged only when it beats that person's
 best, so reading the same file again changes nothing."""
+import datetime
 import json
 import shutil
 import sqlite3
@@ -31,9 +32,18 @@ def sources(extra_dir: str = "") -> list[Path]:
 
 
 def where(path: Path) -> str:
-    """A short name for the YARG install a score file belongs to: release, nightly or its folder."""
+    """A short name for the YARG install a score file belongs to: release or nightly on this PC,
+    else the Steam Deck's (the only other place sources() reads from)."""
     install = Path(path).parent.parent
-    return install.name if install.parent == YARG_HOME else str(install)
+    return install.name if install.parent == YARG_HOME else "Steam Deck"
+
+
+def _when(ticks) -> float:
+    """YARG's play time (.NET ticks of the local clock) as a Unix time."""
+    try:
+        return (datetime.datetime(1, 1, 1) + datetime.timedelta(microseconds=int(ticks) // 10)).timestamp()
+    except (TypeError, ValueError, OverflowError, OSError):
+        return 0.0
 
 
 def _query(path: Path, sql: str) -> list:
@@ -49,17 +59,17 @@ def _query(path: Path, sql: str) -> list:
 
 
 def read_yarg(path: Path) -> list[dict]:
-    """[{"profile", "player", "artist", "title", "inst", "diff", "pct", "stars", "score"}]."""
+    """[{"profile", "player", "t" (when it was played), "artist", "title", "inst", "diff", "pct", "stars", "score"}]."""
     rows = _query(path,
-                  "select s.PlayerId, p.Name, g.SongArtist, g.SongName, s.Instrument, s.Difficulty, s.Percent, s.Stars, s.Score "
+                  "select s.PlayerId, p.Name, g.Date, g.SongArtist, g.SongName, s.Instrument, s.Difficulty, s.Percent, s.Stars, s.Score "
                   "from PlayerScores s join GameRecords g on g.Id = s.GameRecordId "
                   "left join Players p on p.Id = s.PlayerId "
                   "where coalesce(s.IsReplay, 0) = 0 and coalesce(g.PlayedWithReplay, 0) = 0 "
                   "and coalesce(g.HasBots, 0) = 0 and coalesce(g.SongSpeed, 1) >= 1")
     out = []
-    for pid, player, artist, title, inst, diff, pct, stars, score in rows:
+    for pid, player, date, artist, title, inst, diff, pct, stars, score in rows:
         if inst in YARG_INST and diff in YARG_DIFF and pct is not None and 0 <= pct <= 1:
-            out.append({"profile": pid or "", "player": player or "", "artist": artist or "", "title": title or "",
+            out.append({"profile": pid or "", "player": player or "", "t": _when(date), "artist": artist or "", "title": title or "",
                         "inst": YARG_INST[inst], "diff": YARG_DIFF[diff], "pct": round(100 * pct, 1),
                         "stars": stars, "score": score})
     return out

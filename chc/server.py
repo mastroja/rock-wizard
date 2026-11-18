@@ -1498,7 +1498,11 @@ def profile(name: str, request: Request):
         raise HTTPException(404, f"Nobody called {name} has been here")
     mine = [{"id": b["id"], "name": b["name"], "members": b["members"], "logo": b.get("logo"), "image": b.get("image", 0)}
             for b in social.bands() if social.is_member(b, p["name"])]
-    return p | {"songs": songs, "bands": mine, "scores": _scores_out(social.scores_of(p["name"]))}
+    extra = {}
+    if p.get("me"):  # the cog and the "who's playing" switch on your own Scores card
+        extra = {"diffs": social.diffs_of(p["name"]), "playing": social.handover_now(p["name"]),
+                 "yarg": _yarg_profiles_of(p["name"]), "people": [n for n in _people_names() if social.key_of(n) != social.key_of(p["name"])]}
+    return p | {"songs": songs, "bands": mine, "scores": _scores_out(social.scores_of(p["name"]))} | extra
 
 
 @app.get("/api/songs/find")
@@ -1938,10 +1942,12 @@ def _yarg_person(profile_id: str, player: str, people: list[str]) -> str | None:
 
 
 def import_game_scores(announce: bool = True) -> dict:
-    """Log every YARG score that beats its person's best here."""
+    """Log every YARG score that beats its person's best here. A play made while the profile's
+    person had handed it over (social.handover_start) is the other person's; a play on a
+    difficulty that person doesn't count on that instrument isn't logged."""
     with _games["lock"]:
         index, people = _song_lookup(), _people_names()
-        files, added, unmatched, waiting = [], 0, 0, 0
+        files, added, unmatched, waiting, skipped = [], 0, 0, 0, 0
         for f in gamescores.sources(cfg.get("deck_scores", "")):
             try:
                 rows = gamescores.read_yarg(f)
@@ -1954,6 +1960,10 @@ def import_game_scores(announce: bool = True) -> dict:
                 name = _yarg_person(r["profile"], r["player"], people)
                 if not name:
                     waiting += 1
+                    continue
+                name = social.player_at(name, r["t"]) or name
+                if not social.counts(name, r["inst"], r["diff"]):
+                    skipped += 1
                     continue
                 song = index.get(social.song_key(r["artist"], r["title"]))
                 if not song:
@@ -1972,7 +1982,8 @@ def import_game_scores(announce: bool = True) -> dict:
                                f"{song['title'] or song['artist']}", folder=song["folder"], pct=r["pct"])
             files.append({"path": str(f), "where": gamescores.where(f), "scores": len(rows), "new": new})
             added += new
-        _games["last"] = {"t": time.time(), "files": files, "added": added, "unmatched": unmatched, "waiting": waiting}
+        _games["last"] = {"t": time.time(), "files": files, "added": added, "unmatched": unmatched, "waiting": waiting,
+                          "skipped": skipped}
         return _games["last"]
 
 
@@ -1983,7 +1994,7 @@ def _score_files_state() -> tuple:
             out.append((str(f), f.stat().st_mtime))
         except OSError:
             pass
-    return tuple(out) + (json.dumps(cfg.get("yarg_links") or {}, sort_keys=True),)
+    return tuple(out) + (json.dumps(cfg.get("yarg_links") or {}, sort_keys=True), social.rev())
 
 
 def game_scores_watch():
@@ -2027,6 +2038,35 @@ async def game_scores_link(req: Request):
     r = import_game_scores(announce=True)
     _games["seen"] = _score_files_state()
     return r
+
+
+def _yarg_profiles_of(name: str) -> int:
+    """How many YARG profiles count as this person's (linked, or by name)."""
+    files, people = gamescores.sources(cfg.get("deck_scores", "")), _people_names()
+    return sum(1 for p in gamescores.profiles(files) if _yarg_person(p["id"], p["name"], people) == name)
+
+
+@app.post("/api/scores/diffs")
+async def score_diffs(req: Request):
+    """Which difficulties count for you on an instrument: {inst, diffs: [...]}."""
+    b = await req.json()
+    try:
+        return social.set_diffs(who(req), b.get("inst", ""), b.get("diffs"))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/handover")
+async def handover(req: Request):
+    """Someone else is playing on your YARG profile: {to: their name}, or {to: ""} when it's you again.
+    Plays from then on are theirs, matched by when YARG says they happened."""
+    me, to = who(req), str((await req.json()).get("to", "")).strip()
+    if to and to not in _people_names():
+        raise HTTPException(400, f"No one here is called {to}")
+    h = social.handover_start(me, to) if to else social.handover_end(me)
+    if to:
+        social.log("handover", me, f"handed their YARG profile to {to}")
+    return {"playing": h or None}
 
 
 @app.post("/api/gamescores/import")

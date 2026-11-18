@@ -2012,7 +2012,10 @@ async function renderProfile() {
     <div class="card"><h2>Bands</h2>${p.bands.length ? `<div class="row wrap" style="gap:10px">${p.bands.map((b) =>
       `<button class="bandchip" data-band="${esc(b.id)}"><span class="bandlogo tiny">${bandArt(b)}</span><b>${esc(b.name)}</b><span class="avstack">${b.members.slice(0, 5).map((m) => avatar(m, "", "", false)).join("")}</span></button>`).join("")}</div>`
       : `<div class="faint">${p.me ? "Not in a band yet." : `${esc(p.name)} isn't in a band yet.`} <a href="#party" id="tobands">${p.me ? "Start one in Backstage &rarr; Bands" : "See the bands"}</a></div>`}</div>
-    <div class="card"><div class="row spread wrap" style="gap:10px"><h2 style="margin:0">Scores</h2>${p.me ? `<button class="btn small primary" id="scoreadd">+ Log a score</button>` : ""}</div>
+    <div class="card"><div class="row spread wrap" style="gap:10px"><h2 style="margin:0">Scores</h2>${p.me ? `<div class="row wrap" style="gap:8px">
+        <button class="btn small" id="scorecog" title="Which difficulties count" aria-label="Which difficulties count">${ICON.settings} Difficulties</button>
+        <button class="btn small primary" id="scoreadd">+ Log a score</button></div>` : ""}</div>
+      ${p.me && p.yarg ? handoverHTML(p) : ""}
       ${p.scores.length ? `<div class="faint" style="margin:6px 0 10px">Averages of ${p.me ? "your" : "their"} best on each song</div>${scoreGridHTML(p.scores)}
         <div class="row spread wrap" style="gap:10px;margin:18px 0 6px"><h3 style="margin:0">Top performances</h3>
           <div class="row wrap" style="gap:8px"><div class="tabs">${["all", ...INSTS.filter((i) => p.scores.some((x) => x.inst === i))].map((k) =>
@@ -2061,6 +2064,11 @@ async function renderProfile() {
   $$("[data-sinst]").forEach((b) => b.onclick = () => { prof.sinst = b.dataset.sinst; prof.sshown = 15; $$("[data-sinst]").forEach((y) => y.classList.toggle("on", y === b)); drawScores(); });
   $$("[data-ssort]").forEach((b) => b.onclick = () => { prof.ssort = b.dataset.ssort; $$("[data-ssort]").forEach((y) => y.classList.toggle("on", y === b)); drawScores(); });
   const sa = $("#scoreadd"); if (sa) sa.onclick = () => logScore(null, renderProfile);
+  const cog = $("#scorecog"); if (cog) cog.onclick = () => editDiffs(p, renderProfile);
+  const ho = $("#handto"); if (ho) ho.onchange = async () => {
+    try { await post("/api/handover", { to: ho.value }); toast(ho.value ? `Scores from your YARG profile go to ${ho.value} now` : "Your YARG profile's scores are yours again"); renderProfile(); }
+    catch (e) { toast(e.message); }
+  };
   $("#profq").oninput = (e) => { prof.q = e.target.value; prof.shown = 60; draw(); };
   $$("[data-pw]").forEach((b) => b.onclick = () => { prof.where = b.dataset.pw; $$("[data-pw]").forEach((x) => x.classList.toggle("on", x === b)); draw(); });
   const av = $("#profav"); if (av) av.onclick = () => editAvatar(renderProfile);
@@ -2074,6 +2082,42 @@ const pctTxt = (p) => `${+(+p).toFixed(1)}%`;
 const pctColor = (p) => p >= 98 ? "#facc15" : p >= 90 ? "var(--good)" : p >= 75 ? "#a3e635" : p >= 60 ? "#fb923c" : "var(--bad)";
 const pctBar = (p) => `<span class="pctbar"><i style="width:${Math.max(2, +p)}%;background:${pctColor(p)}"></i></span>`;
 const avgOf = (rows) => rows.length ? rows.reduce((t, s) => t + +s.pct, 0) / rows.length : null;
+
+// who's playing on your YARG profile right now: you, or someone you've handed it to
+function handoverHTML(p) {
+  const h = p.playing;
+  return `<div class="handover${h ? " on" : ""}"><div class="row wrap" style="gap:10px;align-items:center">
+      <span>Playing on your YARG profile:</span>
+      <select id="handto" aria-label="Who's playing on your YARG profile"><option value="">You</option>
+        ${p.people.map((n) => `<option value="${esc(n)}" ${h && h.to === n ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></div>
+    <div class="faint" style="margin-top:4px">${h ? `${esc(h.to)} since ${new Date(h.start * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}: their scores go to them until you pick You again.`
+      : "Someone else grabbing your profile in YARG? Pick them here and their scores won't land on you."}</div></div>`;
+}
+
+// the cog: which difficulties count for you on each instrument
+function editDiffs(p, after) {
+  const st = JSON.parse(JSON.stringify(p.diffs || {}));
+  const scrim = document.createElement("div"); scrim.className = "scrim pop";
+  const m = document.createElement("div"); m.className = "modal card pop scoremodal";
+  const close = () => { scrim.remove(); m.remove(); };
+  scrim.onclick = close;
+  document.body.append(scrim, m);
+  const draw = () => {
+    m.innerHTML = `<div class="row spread"><h2 style="margin:0">Difficulties you play</h2><button class="btn small" id="dfx">Done</button></div>
+      <p class="faint">Only these count: scores on the others aren't logged from YARG and don't show on your Scores. Nothing is deleted, so ticking one again brings its scores back.</p>
+      ${INSTS.map((i) => `<div class="faint scl">${cap(i)}</div><div class="tabs">${DIFFS.map((d) =>
+        `<button class="${(st[i] || DIFFS).includes(d) ? "on" : ""}" data-di="${i}" data-dd="${d}" aria-pressed="${(st[i] || DIFFS).includes(d)}">${cap(d)}</button>`).join("")}</div>`).join("")}`;
+    $("#dfx", m).onclick = () => { close(); if (after) after(); };
+    $$("[data-di]", m).forEach((b) => b.onclick = async () => {
+      const i = b.dataset.di, d = b.dataset.dd, cur = st[i] || DIFFS.slice();
+      const next = cur.includes(d) ? cur.filter((x) => x !== d) : [...cur, d];
+      if (!next.length) { toast("Keep at least one difficulty"); return; }
+      try { Object.assign(st, await post("/api/scores/diffs", { inst: i, diffs: next })); draw(); }
+      catch (e) { toast(e.message); }
+    });
+  };
+  draw();
+}
 
 // pick a song (when none is given), then the instrument, difficulty and percentage
 function logScore(song, after) {

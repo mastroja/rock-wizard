@@ -672,6 +672,8 @@ details.fold summary .bandlogo.tiny { margin-right: 4px; }
 .scoremodal { width: min(480px, calc(100vw - 24px)); }
 .scoremodal .scl { margin: 14px 0 6px; }
 .scoremodal .tabs { flex-wrap: wrap; }
+.handover { margin: 12px 0 4px; padding: 10px 12px; border-radius: 12px; background: rgba(255,255,255,.04); border: 1px solid var(--line, rgba(255,255,255,.08)); }
+.handover.on { border-color: #f59e0b; background: rgba(245,158,11,.08); }
 .scsong { margin-top: 12px; }
 .schits { max-height: 50dvh; overflow-y: auto; margin-top: 8px; }
 .pctin { width: 120px; font-size: 28px; font-weight: 800; text-align: right; background: var(--surface); color: var(--text);

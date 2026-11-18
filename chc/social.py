@@ -35,7 +35,8 @@ def _d() -> dict:
         except (OSError, ValueError):
             _data = {}
         for key, empty in (("events", []), ("next_id", 1), ("rev", 0), ("profiles", {}), ("shame", {}),
-                           ("hearts", {}), ("setlist", []), ("bands", {}), ("gigs", {}), ("scores", {})):
+                           ("hearts", {}), ("setlist", []), ("bands", {}), ("gigs", {}), ("scores", {}),
+                           ("handovers", [])):
             _data.setdefault(key, empty)
     return _data
 
@@ -544,12 +545,46 @@ def gig_edit(gid: str, op: str, **a) -> None:
 DIFFS = ("easy", "medium", "hard", "expert")
 
 
+def diffs_of(name: str) -> dict:
+    """{instrument: [difficulties]} that count for this person (all of them unless they've picked)."""
+    with _lock:
+        mine = (_d()["profiles"].get(key_of(name)) or {}).get("diffs") or {}
+    return {i: [d for d in DIFFS if d in mine[i]] if mine.get(i) else list(DIFFS) for i in INSTRUMENTS}
+
+
+def set_diffs(name: str, inst: str, diffs) -> dict:
+    """Which difficulties count for this person on an instrument; scores on the others aren't
+    logged and don't show (they're kept, so ticking a difficulty again brings them back)."""
+    if inst not in INSTRUMENTS:
+        raise ValueError("Pick an instrument")
+    diffs = [d for d in DIFFS if d in (diffs or [])]
+    if not diffs:
+        raise ValueError("Pick at least one difficulty")
+    with _lock:
+        prof = _d()["profiles"].setdefault(key_of(name), {})
+        prof.setdefault("diffs", {})[inst] = diffs
+        _save()
+    return diffs_of(name)
+
+
+def counts(name: str, inst: str, diff: str) -> bool:
+    return diff in diffs_of(name).get(inst, DIFFS)
+
+
+def _diffs_word(diffs) -> str:
+    names = [d.title() for d in diffs]
+    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+
+
 def score_add(name: str, key: str, artist: str, title: str, inst: str, diff: str, pct) -> dict:
     """Log a score; only the best is kept. {"best": a new best?, "was": the old best or None, "pct"}."""
     if inst not in INSTRUMENTS:
         raise ValueError("Pick an instrument")
     if diff not in DIFFS:
         raise ValueError("Pick a difficulty")
+    if not counts(name, inst, diff):
+        raise ValueError(f"Only {_diffs_word(diffs_of(name)[inst])} count on {inst} for {name}. "
+                         "Change that with the cog on the Scores card.")
     try:
         pct = round(float(pct), 1)
     except (TypeError, ValueError):
@@ -572,8 +607,11 @@ def score_add(name: str, key: str, artist: str, title: str, inst: str, diff: str
 
 
 def scores_of(name: str) -> list[dict]:
+    """This person's bests, on the difficulties that count for them."""
+    allowed = diffs_of(name)
     with _lock:
-        return [dict(s) for s in (_d()["scores"].get(key_of(name)) or {}).values()]
+        return [dict(s) for s in (_d()["scores"].get(key_of(name)) or {}).values()
+                if s["diff"] in allowed.get(s["inst"], DIFFS)]
 
 
 def score_remove(name: str, key: str, inst: str, diff: str) -> None:
@@ -588,4 +626,48 @@ def song_scores(key: str) -> list[dict]:
     with _lock:
         out = [{"name": s.get("by") or who, "inst": s["inst"], "diff": s["diff"], "pct": s["pct"], "t": s["t"]}
                for who, mine in _d()["scores"].items() for s in mine.values() if s["key"] == key]
+    out = [s for s in out if counts(s["name"], s["inst"], s["diff"])]
     return sorted(out, key=lambda s: (-DIFFS.index(s["diff"]), -s["pct"], s["t"]))
+
+
+# ---------- hand-overs: someone else playing on a person's YARG profile ----------
+# [{"owner": name key, "to": name, "start": t, "end": t or None}]: while one is open, scores from
+# the owner's YARG profiles go to "to". Plays are matched by when YARG says they happened.
+def handover_start(owner: str, to: str) -> dict:
+    if key_of(to) == key_of(owner):
+        return handover_end(owner)
+    now = time.time()
+    with _lock:
+        for h in _d()["handovers"]:
+            if h["owner"] == key_of(owner) and h["end"] is None:
+                h["end"] = now
+        h = {"owner": key_of(owner), "to": to, "start": now, "end": None}
+        _d()["handovers"].append(h)
+        del _d()["handovers"][:-200]
+        _save()
+    return dict(h)
+
+
+def handover_end(owner: str) -> dict:
+    now = time.time()
+    with _lock:
+        for h in _d()["handovers"]:
+            if h["owner"] == key_of(owner) and h["end"] is None:
+                h["end"] = now
+        _save()
+    return {}
+
+
+def handover_now(owner: str) -> dict | None:
+    """The open hand-over of this person's YARG profiles, if any."""
+    with _lock:
+        return next((dict(h) for h in _d()["handovers"] if h["owner"] == key_of(owner) and h["end"] is None), None)
+
+
+def player_at(owner: str, t: float) -> str | None:
+    """Who had this person's YARG profiles at time t, when it was someone else."""
+    with _lock:
+        for h in reversed(_d()["handovers"]):
+            if h["owner"] == key_of(owner) and h["start"] <= t and (h["end"] is None or t < h["end"]):
+                return h["to"]
+    return None
