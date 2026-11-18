@@ -127,6 +127,12 @@ label.field { display: block; font-size: 13px; color: var(--muted); margin-botto
 .chip.green { color: var(--good); border-color: rgba(53, 208, 139, .35); background: rgba(53, 208, 139, .1); }
 .chip.yellow { color: var(--warn); border-color: rgba(255, 181, 71, .35); background: rgba(255, 181, 71, .1); }
 .chip.red { color: var(--bad); border-color: rgba(255, 93, 114, .35); background: rgba(255, 93, 114, .1); }
+.chip.gold { color: #facc15; border-color: rgba(250, 204, 21, .45); background: rgba(250, 204, 21, .12); gap: 4px; }
+.crown { width: 16px; height: 16px; vertical-align: -3px; flex: none; }
+.fame { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 8px 20px; }
+.fame h3 { margin: 4px 0 2px; }
+.famerow { gap: 10px; }
+.famerow.first { background: linear-gradient(90deg, rgba(250, 204, 21, .10), transparent 70%); border-radius: 10px; }
 .chip.accent { color: #c9b6ff; border-color: rgba(139, 92, 255, .4); background: rgba(139, 92, 255, .14); }
 
 .bar { height: 8px; border-radius: 99px; background: var(--bg2); overflow: hidden; border: 1px solid var(--border); }

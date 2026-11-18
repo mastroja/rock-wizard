@@ -707,7 +707,7 @@ async function renderStaging(reviewAll = false) {
     <div class="row spread wrap" style="margin-bottom:14px">
       <div class="tabs">${[["all", "All"], ["draft", "To review"], ["reviewed", "Reviewed"], ["mine", "My charts"]].map(([k, l]) =>
         `<button class="${stagingFilter === k ? "on" : ""}" data-filter="${k}">${l} <span class="faint">${counts[k]}</span></button>`).join("")}</div>
-      <div class="row" style="gap:12px;min-width:0">${sortSelect("staging")}<span class="faint ellipsis">${esc(r.folder)}</span></div>
+      <div class="row" style="gap:12px;min-width:0">${sortSelect("staging")}</div>
     </div>
     ${songs.length ? `<div class="songs">${songs.map((s) => {
       const v = s.verdict && VERDICT[s.verdict];
@@ -894,8 +894,7 @@ async function openReview(folder, live = false) {
       <button class="btn" id="watch">${ICON.play} Watch the chart</button>
       <button class="btn${S.hearts.mine.has(s.key) ? " hearted" : ""}" id="heartbtn">${HEART}<span>${S.hearts.mine.has(s.key) ? "Favourite" : "Add to favourites"}</span></button>
       ${live ? `<button class="btn" id="setadd">+ Tonight's setlist</button>` : ""}
-      <button class="btn" id="bandadd">+ Band set list</button>
-      <button class="btn" id="scorelog">+ Log a score</button></div>
+      <button class="btn" id="bandadd">+ Band set list</button></div>
     <details class="card fold" id="scorefold"><summary><h2>Scores</h2> <span class="faint" id="scoresum"></span></summary><div id="scorelist"><div class="empty"><span class="spinner"></span></div></div></details>
     ${owner() ? `<div class="card next"><h2>${live ? "Actions" : "Next"}</h2>
       ${live ? "" : `<div class="row">
@@ -946,7 +945,6 @@ async function openReview(folder, live = false) {
     if (n) $("#scorefold", dr).open = true;
   };
   loadScores();
-  $("#scorelog", dr).onclick = () => logScore(s, loadScores);
   const refreshAfter = (folder2) => { openReview(folder2, live); if (view() === "staging") renderStaging(); if (view() === "live") renderLive(); };
   const lrm = $("#liveremove", dr);
   if (lrm) lrm.onclick = async () => {
@@ -1353,7 +1351,7 @@ async function renderSettings() {
         <div class="faint">${esc(d.kind)} · last seen ${ago(d.last)}</div></div>
         <label class="row faint" style="gap:6px;white-space:nowrap"><input type="checkbox" data-mine="${d.id}" ${d.owner ? "checked" : ""}> Mine</label>
         <button class="btn small" data-forget="${d.id}">Forget</button></div>`).join("")
-      : `<div class="empty">No phones yet. Scan the QR code above.</div>`}</div>`);
+      : `<div class="empty">No phones yet. Scan the code in Backstage &rarr; Invite.</div>`}</div>`);
   $$("[data-mine]").forEach((c) => c.onchange = async () => { await post(`/api/devices/${c.dataset.mine}`, { owner: c.checked }); toast(c.checked ? "Marked as yours" : "Now treated as a friend's device"); });
   $$("[data-forget]").forEach((b) => b.onclick = async () => {
     if (!confirm("Forget this device? It stays connected, but asks for a name again next time.")) return;
@@ -1383,16 +1381,11 @@ async function renderSettings() {
   };
   }
   const p = await api("/api/pairing");
-  $("#phone").innerHTML = `<h2>${local ? "Use RockWizard on your phone" : "Share RockWizard"}</h2>
-    <div class="row wrap" style="align-items:flex-start;gap:20px">
-      ${p.qr ? `<div class="qr">${p.qr}</div>` : ""}
-      <div class="grow" style="min-width:240px">
-        ${local ? `<p style="margin-top:0">Scan with your iPhone's camera, then in Safari tap <b>Share → Add to Home Screen</b>. Your PC still does the work.</p>
-        <p class="faint">At home this works over Wi-Fi. Away from home, install <b>Tailscale</b> (free) on this PC and your iPhone and sign in to both; the link then uses the Tailscale address (100.x.x.x).</p>`
-        : `<p style="margin-top:0">Let a friend scan this with their phone's camera. They'll be asked their name, and songs they add are marked with it.</p>
-        <p class="faint">They need to be on your Wi-Fi, or on your Tailscale network when away from home.</p>`}
-        ${p.urls.map((u) => `<div style="margin-top:6px"><code>${esc(u)}</code></div>`).join("")}
-        ${local ? `<button class="btn small" id="newkey" style="margin-top:12px">New pairing key (unpairs other phones)</button>` : ""}</div></div>`;
+  $("#phone").innerHTML = `<h2>Phones</h2>
+    <p style="margin-top:0">To bring a phone in, open <a href="#party" id="toinvite">Backstage &rarr; Invite</a> and scan the code. At home this works over Wi-Fi; away from home, install <b>Tailscale</b> (free) on this PC and the phone and sign in to both.</p>
+    ${p.urls.length ? "" : `<p class="faint">No network address found for this PC right now.</p>`}
+    ${local ? `<button class="btn small" id="newkey">New pairing key (unpairs every phone)</button>` : ""}`;
+  $("#toinvite").onclick = () => { partyTab = "invite"; };
   if (local) $("#newkey").onclick = async () => { if (confirm("Make a new key? Phones paired before will need to scan again.")) { await post("/api/pairing/reset"); renderSettings(); } };
 }
 
@@ -1476,12 +1469,12 @@ async function socialTick(st) {
 }
 
 // ---------- party: tonight's setlist, bands, gigs, people, invite ----------
-let partyTab = "setlist";
+let partyTab = "people";
 
 async function renderParty(keep = false) {
   if (!keep || !$("#pbody")) {
-    page("Backstage", "Tonight's setlist, bands, gigs and who's who.",
-      `<div class="tabs" style="margin-bottom:14px">${[["setlist", "Setlist"], ["bands", "Bands"], ["gigs", "Gigs"], ["people", "People"], ["invite", "Invite"]].map(([k, l]) =>
+    page("Backstage", "Who's who, bands, gigs, tonight's setlist and invites.",
+      `<div class="tabs" style="margin-bottom:14px">${[["people", "People"], ["bands", "Bands"], ["gigs", "Gigs"], ["setlist", "Setlist"], ["invite", "Invite"]].map(([k, l]) =>
         `<button class="${partyTab === k ? "on" : ""}" data-ptab="${k}">${l}</button>`).join("")}</div>
       <div id="pbody"><div class="empty"><span class="spinner"></span></div></div>`);
     $$("[data-ptab]").forEach((b) => b.onclick = () => { partyTab = b.dataset.ptab; renderParty(); });
@@ -1527,31 +1520,38 @@ function wireSetlist(body) {
 }
 
 async function peopleHTML() {
-  await loadPeople();
+  const [, f] = await Promise.all([loadPeople(), api("/api/fame")]);
   const list = S.peopleList || [], shamed = list.filter((p) => p.shame.gate).sort((a, b) => b.shame.gate - a.shame.gate);
   const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
-  return `<div class="card"><div class="row spread wrap" style="gap:10px"><h2 style="margin:0">Your colour</h2>
-        ${S.me.who ? `<div class="row" style="gap:8px"><button class="btn small" id="myavatar">Edit avatar</button><button class="btn small" data-user="${esc(S.me.who)}">My profile</button></div>` : ""}</div>
-      <p class="faint">Shows on your name and on songs you add. Tap anyone below to see their profile.</p>
-      <div class="swatches">${(S.me.colors || []).map((c) => `<button class="swatch${c === S.me.color ? " on" : ""}" data-color="${c}" style="background:${c}" aria-label="Pick this colour"></button>`).join("")}</div></div>
+  return `${fameHTML(f)}
     <div class="people">${list.map((p) => `<div class="card person link" data-user="${esc(p.name)}">${avatar(p.name, p.color, "big" + (p.online ? " on" : ""), false)}
       <div class="grow" style="min-width:0"><div class="ellipsis"><b>${esc(p.name)}</b>${p.me ? ` <span class="faint">(you)</span>` : ""}${p.owner ? ` <span class="chip accent">Host</span>` : ""}</div>
+        ${crownsHTML(p.crowns)}
         <div class="faint">${p.online ? "Here now" : p.last ? `Last here ${since(p.last)}` : "Not seen yet"}</div>
         <div style="margin-top:6px">${plural(p.added, "song")} added${p.hearts ? ` · ${plural(p.hearts, "favourite")}` : ""}</div>
         ${p.top_artist ? `<div class="faint ellipsis">Most added: ${esc(p.top_artist)} (${p.top_count})</div>` : ""}</div></div>`).join("")}</div>
-    <div class="card"><h2>Hall of shame</h2>
+    ${shamed.length ? `<div class="card"><h2>Hall of shame</h2>
       <p class="faint" style="margin-top:0">How it went at the Taylor Swift checkpoint.</p>
-      ${shamed.length ? shamed.map((p, i) => `<div class="item">${avatar(p.name, p.color)}<div class="grow"><b>${esc(p.name)}</b>${i ? "" : ` <span class="chip yellow">Most stopped</span>`}
-        <div class="faint">Stopped ${plural(p.shame.gate, "time")} · failed the quiz ${p.shame.fail} · too slow ${p.shame.timeout} · got through ${p.shame.pass}</div></div></div>`).join("")
-      : `<div class="empty">Nobody has met the checkpoint yet.</div>`}</div>`;
+      ${shamed.map((p, i) => `<div class="item">${avatar(p.name, p.color)}<div class="grow"><b>${esc(p.name)}</b>${i ? "" : ` <span class="chip yellow">Most stopped</span>`}
+        <div class="faint">Stopped ${plural(p.shame.gate, "time")} · failed the quiz ${p.shame.fail} · too slow ${p.shame.timeout} · got through ${p.shame.pass}</div></div></div>`).join("")}</div>` : ""}`;
 }
-function wirePeople(body) {
-  const ed = $("#myavatar", body);
-  if (ed) ed.onclick = () => editAvatar(() => renderParty(true));
-  $$("[data-color]", body).forEach((b) => b.onclick = async () => {
-    try { S.me = await post("/api/me", { color: b.dataset.color }); toast("Colour saved"); } catch (e) { toast(e.message); }
-    renderParty(true);
-  });
+function wirePeople(body) { /* the cards are links (data-user); nothing else to wire */ }
+
+// ---------- Wall of Fame: the best average on each instrument ----------
+const CROWN = `<svg class="crown" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 18L2 7l5.5 4.5L12 4l4.5 7.5L22 7l-1 11z" fill="#facc15" stroke="#b45309" stroke-width="1.2" stroke-linejoin="round"/><rect x="3" y="19" width="18" height="2.5" rx="1" fill="#facc15"/></svg>`;
+const crownsHTML = (insts) => (insts || []).length ? `<div class="row wrap" style="gap:6px;margin-top:4px">${insts.map((i) =>
+  `<span class="chip gold" title="Best ${i} average here">${CROWN} Top ${i}</span>`).join("")}</div>` : "";
+function fameHTML(f) {
+  const insts = INSTS.filter((i) => (f.fame[i] || []).length);
+  const row = (r, i) => `<div class="item famerow${i === 0 && r.ok ? " first" : ""} link" data-user="${esc(r.name)}">
+      <span class="setno">${r.ok ? i + 1 : ""}</span>${avatar(r.name, colorOf(r.name))}
+      <div class="grow" style="min-width:0"><b class="ellipsis">${esc(r.name)}</b>${i === 0 && r.ok ? ` ${CROWN}` : ""}
+        <div class="faint">${r.ok ? plural(r.songs, "song") : `${plural(r.songs, "song")} · ${f.min - r.songs} more to get ranked`}</div></div>
+      <div class="pctcol"><b style="color:${pctColor(r.avg)}">${pctTxt(r.avg)}</b>${pctBar(r.avg)}</div></div>`;
+  return `<div class="card"><h2>Wall of Fame</h2>
+    <p class="faint" style="margin-top:0">The best average on each instrument, over everyone's YARG bests (${f.min} songs to get ranked). First place wears the crown on their profile.</p>
+    ${insts.length ? `<div class="fame">${insts.map((i) => `<div><h3>${cap(i)}</h3>${f.fame[i].slice(0, 3).map(row).join("")}</div>`).join("")}</div>`
+      : `<div class="empty">No scores yet. Play in YARG and the best averages show up here.</div>`}</div>`;
 }
 
 // ---------- avatars: built from parts and drawn here (the server keeps only the choices), or a photo ----------
@@ -2005,9 +2005,11 @@ async function renderProfile() {
     <div class="card profhead">${avatar(p.name, p.color, "huge" + (p.online ? " on" : ""), false)}
       <div class="grow" style="min-width:0">
         <div class="row wrap" style="gap:8px"><h2 style="margin:0">${esc(p.name)}</h2>${p.me ? `<span class="faint">(you)</span>` : ""}${p.owner ? `<span class="chip accent">Host</span>` : ""}</div>
+        ${crownsHTML(p.crowns)}
         <div class="faint">${p.online ? "Here now" : p.last ? `Last here ${since(p.last)}` : "Not seen yet"}</div>
         <div class="stats"><span><b>${p.songs.length}</b> songs added</span>${p.scores.length ? `<span><b>${p.scores.length}</b> ${p.scores.length === 1 ? "score" : "scores"}</span>` : ""}<span><b>${p.hearts}</b> favourites</span><span><b>${p.bands.length}</b> ${p.bands.length === 1 ? "band" : "bands"}</span></div>
-        ${p.me ? `<div class="row wrap" style="gap:8px;margin-top:12px"><button class="btn small" id="profav">${p.avatar || p.photo ? "Edit avatar" : "Make an avatar"}</button></div>` : ""}
+        ${p.me ? `<div class="row wrap" style="gap:12px;margin-top:12px;align-items:center"><button class="btn small" id="profav">${p.avatar || p.photo ? "Edit avatar" : "Make an avatar"}</button>
+          <div class="swatches" title="Your colour: on your name and on songs you add">${(S.me.colors || []).map((c) => `<button class="swatch${c === S.me.color ? " on" : ""}" data-color="${c}" style="background:${c}" aria-label="Use this colour"></button>`).join("")}</div></div>` : ""}
       </div></div>
     <div class="card"><h2>Bands</h2>${p.bands.length ? `<div class="row wrap" style="gap:10px">${p.bands.map((b) =>
       `<button class="bandchip" data-band="${esc(b.id)}"><span class="bandlogo tiny">${bandArt(b)}</span><b>${esc(b.name)}</b><span class="avstack">${b.members.slice(0, 5).map((m) => avatar(m, "", "", false)).join("")}</span></button>`).join("")}</div>`
@@ -2022,7 +2024,7 @@ async function renderProfile() {
             `<button class="${prof.sinst === k ? "on" : ""}" data-sinst="${k}">${k === "all" ? "All" : cap(k)}</button>`).join("")}</div>
           <div class="tabs">${[["best", "Best"], ["new", "Newest"]].map(([k, l]) => `<button class="${prof.ssort === k ? "on" : ""}" data-ssort="${k}">${l}</button>`).join("")}</div></div></div>
         <div id="profscores"></div>`
-      : `<div class="empty">${p.me ? "No scores yet. Play in YARG with a linked profile (Settings) and your scores show up here by themselves, or log one from the song's page." : `${esc(p.name)} hasn't logged any scores yet.`}</div>`}</div>
+      : `<div class="empty">${p.me ? "No scores yet. Play in YARG with a linked profile (Settings) and your scores show up here by themselves, or log one with + Log a score." : `${esc(p.name)} hasn't logged any scores yet.`}</div>`}</div>
     <div class="card"><div class="row spread wrap" style="gap:10px;margin-bottom:6px"><h2 style="margin:0">Songs added</h2>
         <div class="tabs">${[["all", `All ${p.songs.length}`], ["quickplay", `Quickplay ${n("quickplay")}`], ["staging", `Staging ${n("staging")}`]].map(([k, l]) =>
           `<button class="${prof.where === k ? "on" : ""}" data-pw="${k}">${l}</button>`).join("")}</div></div>
@@ -2072,6 +2074,9 @@ async function renderProfile() {
   $("#profq").oninput = (e) => { prof.q = e.target.value; prof.shown = 60; draw(); };
   $$("[data-pw]").forEach((b) => b.onclick = () => { prof.where = b.dataset.pw; $$("[data-pw]").forEach((x) => x.classList.toggle("on", x === b)); draw(); });
   const av = $("#profav"); if (av) av.onclick = () => editAvatar(renderProfile);
+  $$("[data-color]").forEach((b) => b.onclick = async () => {
+    try { S.me = await post("/api/me", { color: b.dataset.color }); await loadPeople(); toast("Colour saved"); renderProfile(); } catch (e) { toast(e.message); }
+  });
   const tb = $("#tobands"); if (tb) tb.onclick = () => { partyTab = "bands"; };
 }
 

@@ -1459,6 +1459,41 @@ def names():
     return [{"name": n, "color": social.color_of(n)} for n in seen.values()]
 
 
+FAME_MIN = 5  # scores on an instrument before someone can top the Wall of Fame there
+
+
+def _fame(names) -> dict:
+    """The Wall of Fame: {instrument: [{"name", "avg", "songs", "ok"}, ...] best first}. avg is a
+    person's average best percentage on that instrument, over the difficulties that count for them
+    (the "All" column of their Scores card). Only people with FAME_MIN scores there ("ok") are
+    ranked; the rest follow, so they can see how far they have to go."""
+    out = {}
+    for n in names:
+        by = {}
+        for s in social.scores_of(n):
+            by.setdefault(s["inst"], []).append(float(s["pct"]))
+        for inst, pcts in by.items():
+            out.setdefault(inst, []).append({"name": n, "avg": round(sum(pcts) / len(pcts), 1), "songs": len(pcts),
+                                             "ok": len(pcts) >= FAME_MIN})
+    for rows in out.values():
+        rows.sort(key=lambda r: (not r["ok"], -r["avg"], -r["songs"], r["name"].lower()))
+    return out
+
+
+def _crowns(fame: dict) -> dict:
+    """Name key -> the instruments that person is first on."""
+    out = {}
+    for inst, rows in fame.items():
+        if rows and rows[0]["ok"]:
+            out.setdefault(social.key_of(rows[0]["name"]), []).append(inst)
+    return out
+
+
+@app.get("/api/fame")
+def fame(request: Request):
+    return {"min": FAME_MIN, "fame": _fame([r["name"] for r in people(request)])}
+
+
 @app.get("/api/people")
 def people(request: Request):
     now, rows = time.time(), {}
@@ -1471,6 +1506,7 @@ def people(request: Request):
         r["last"] = max(r["last"], d.get("last", 0))
     added = added_counts()
     me_key = social.key_of(who(request))
+    crowns = _crowns(_fame([r["name"] for r in rows.values()]))
     out = []
     for k, r in rows.items():
         a = added.get(k) or {"n": 0, "artists": {}}
@@ -1478,7 +1514,8 @@ def people(request: Request):
         out.append(r | {"color": social.color_of(r["name"]), "online": now - r["last"] < 150, "me": k == me_key,
                         "added": a["n"], "top_artist": top[0], "top_count": top[1],
                         "hearts": len(social.hearts_of(r["name"])), "shame": social.shame_of(r["name"]),
-                        "avatar": social.avatar_of(r["name"]), "photo": social.photo_of(r["name"])})
+                        "avatar": social.avatar_of(r["name"]), "photo": social.photo_of(r["name"]),
+                        "crowns": crowns.get(k, [])})
     return sorted(out, key=lambda r: (-r["added"], r["name"].lower()))
 
 
@@ -1493,7 +1530,7 @@ def profile(name: str, request: Request):
         p = {"name": n, "owner": False, "last": 0, "online": False, "me": False, "added": len(songs),
              "color": social.color_of(n), "avatar": social.avatar_of(n), "photo": social.photo_of(n),
              "hearts": len(social.hearts_of(n)),
-             "shame": social.shame_of(n)}
+             "shame": social.shame_of(n), "crowns": []}
     if p is None:
         raise HTTPException(404, f"Nobody called {name} has been here")
     mine = [{"id": b["id"], "name": b["name"], "members": b["members"], "logo": b.get("logo"), "image": b.get("image", 0)}
