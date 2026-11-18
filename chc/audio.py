@@ -14,8 +14,8 @@ def ffmpeg_exe() -> str:
     return imageio_ffmpeg.get_ffmpeg_exe()
 
 
-def _run(cmd):
-    r = subprocess.run(cmd, capture_output=True, creationflags=NO_WINDOW)
+def _run(cmd, data: bytes | None = None):
+    r = subprocess.run(cmd, input=data, capture_output=True, creationflags=NO_WINDOW)
     if r.returncode:
         raise RuntimeError(r.stderr.decode("utf-8", "replace")[-400:])
 
@@ -30,8 +30,21 @@ def to_wav(src: Path, dest: Path) -> Path:
 def to_ogg(wav: Path, dest: Path, lead: float = 0.0) -> Path:
     """Encode to ogg, with `lead` seconds of silence added at the start."""
     delay = ["-af", f"adelay={int(round(lead * 1000))}:all=1"] if lead else []
-    _run([ffmpeg_exe(), "-y", "-loglevel", "error", "-i", str(wav), *delay,
-          "-c:a", "libvorbis", "-q:a", "6", str(dest)])
+    out = [*delay, "-c:a", "libvorbis", "-q:a", "6", str(dest)]
+    if Path(wav).suffix.lower() == ".wav":
+        # 16-bit wavs (the stems) go in as raw samples: ffmpeg's wav reader takes PCM that happens to
+        # look like an S/PDIF bitstream (IEC 61937) for AAC, and then fails on garbage
+        try:
+            with wave.open(str(wav), "rb") as w:
+                sr, ch, width = w.getframerate(), w.getnchannels(), w.getsampwidth()
+                pcm = w.readframes(w.getnframes()) if width == 2 else None
+        except (wave.Error, EOFError):
+            pcm = None  # not a plain PCM wav: ffmpeg reads it
+        if pcm is not None:
+            _run([ffmpeg_exe(), "-y", "-loglevel", "error", "-f", "s16le", "-ar", str(sr), "-ac", str(ch),
+                  "-i", "pipe:0", *out], pcm)
+            return dest
+    _run([ffmpeg_exe(), "-y", "-loglevel", "error", "-i", str(wav), *out])
     return dest
 
 
