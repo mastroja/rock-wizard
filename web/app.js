@@ -283,23 +283,23 @@ const ICON = {
   party: P('<circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5"/><circle cx="17" cy="9" r="2.5"/><path d="M16 14.6c2.8.2 5 2 5 4.9"/>'),
   rocket: P('<path d="M5 15c-1.5 1.5-2 5-2 5s3.5-.5 5-2"/><path d="M14 4c3-1 6-1 6-1s0 3-1 6l-6 6-5-5z"/><path d="M9 10 5 9l-2 2 4 1M14 15l1 4 2-2-1-4"/>'),
 };
-const VIEWS = [["create", "Create"], ["queue", "Queue"], ["staging", "Staging"], ["live", "Quickplay"], ["party", "Party"], ["library", "Library"], ["settings", "Settings"]];
+const VIEWS = [["create", "Create"], ["queue", "Queue"], ["staging", "Staging"], ["live", "Quickplay"], ["party", "Backstage"], ["library", "Library"], ["settings", "Settings"]];
 
 // ---------- state + shell ----------
 const S = { settings: {}, jobs: [], status: {}, staging: null, me: { owner: true, name: "" },
-  people: {}, peopleList: [], hearts: { mine: new Set(), counts: {} }, actId: -1, socialRev: -1, unread: 0 };
+  people: {}, peopleList: [], hearts: { mine: new Set(), counts: {} }, actId: -1, socialRev: -1 };
 const owner = () => S.me.owner;
 const byChip = (s) => s.added_by ? `<span class="chip by link"${tint(s.added_by)} data-user="${esc(s.added_by)}">from ${esc(s.added_by)}</span>` : "";
 const view = () => (location.hash.slice(1).split("?")[0] || "create");
 const hashArg = (k) => new URLSearchParams(location.hash.split("?")[1] || "").get(k) || "";
-const navView = () => (["profile", "band", "gig"].includes(view()) ? "party" : view());  // a profile or band lives under Party
+const navView = () => (["profile", "band", "gig"].includes(view()) ? "party" : view());  // a profile or band lives under Backstage
 
 function navHTML(cls) {
   const active = S.jobs.filter((j) => j.status === "queued" || j.status === "running").length;
   return VIEWS.filter(([id]) => owner() || id !== "library").map(([id, label]) =>
     `<button class="${cls}${navView() === id ? " on" : ""}" data-go="${id}">${ICON[id]}<span>${label}</span>` +
     (id === "queue" && active ? `<span class="count">${active}</span>` : "") +
-    (id === "party" && S.unread ? `<span class="count">${S.unread}</span>` : "") + `</button>`).join("");
+    `</button>`).join("");
 }
 // only touch the page when something changed: the status poll runs every 1.5 s, and rewriting
 // the tab bar under an open iPhone keyboard can knock the focus out of a text field
@@ -354,7 +354,7 @@ async function refresh() {
     const sig = (list) => JSON.stringify(list.map((j) => [j.id, j.status, j.step, Math.round(j.progress * 50), (j.votes || []).length]));
     const before = sig(S.jobs);
     const was = Object.fromEntries(S.jobs.map((j) => [j.id, j.status]));
-    // new songs are announced from the activity feed (socialTick), to whoever added them
+    // new songs are announced from the activity log (socialTick), to whoever added them
     const finished = jobs.filter((j) => j.kind !== "convert" && j.status === "done" && ["running", "queued"].includes(was[j.id]));
     if (finished.length) { confetti(); toast(`${finished[0].title} is ready to check`); }
     S.jobs = jobs; S.status = status;
@@ -1242,18 +1242,27 @@ async function loadScoreboard() {
     + `<p class="faint" style="margin-bottom:0">↑ higher is better, ↓ lower is better. Human-or-AI is how often a detector tells our chart from a human's: two human studios score ${Math.round(r.studios * 100)}%, so that is the target.</p>`;
 }
 
+// asks once for browser alerts (song ready, song live); shown in Settings until answered
+const alertsCard = () => (canNotify() && Notification.permission === "default" ? `<div class="card row spread wrap" style="gap:10px">
+  <span>Get an alert on this computer when your song is ready.</span><button class="btn small" id="notifyon">Turn on alerts</button></div>` : "");
+function wireAlerts() {
+  const b = $("#notifyon");
+  if (b) b.onclick = async () => { const p = await Notification.requestPermission(); toast(p === "granted" ? "Alerts are on" : "Alerts stay off"); render(); };
+}
+
 async function renderSettings() {
   if (!owner()) {
-    page("Settings", "", `<div class="card"><h2>You</h2><p>You're using RockWizard as <b>${esc(S.me.name)}</b>.
+    page("Settings", "", `${alertsCard()}<div class="card"><h2>You</h2><p>You're using RockWizard as <b>${esc(S.me.name)}</b>.
       Songs you add are marked as suggested by you.</p><button class="btn" id="rename">Change name</button></div>`);
     $("#rename").onclick = async () => { await askName(true); renderNav(); render(); };
+    wireAlerts();
     return;
   }
   const st = S.settings, local = st.local;
   const field = (id, label, hint, kind = "folder") => `<div style="margin-top:14px"><label class="field">${label}</label>
     <div class="row"><input id="${id}" value="${esc(st[id] || "")}" class="grow">${desk() && kind ? `<button class="btn" data-pick="${id}" data-kind="${kind}">Browse</button>` : ""}</div>
     ${hint ? `<div class="faint" style="margin-top:4px">${hint}</div>` : ""}</div>`;
-  page("Settings", "", `
+  page("Settings", "", `${alertsCard()}
     <div class="card"><h2>Folders and programs</h2>
       ${field("songs_dir", "Staging folder", "New charts are saved here for review first.")}
       ${field("live_dir", "Live folder", "Where published songs go (your Quickplay folder, which Syncthing sends to the Deck).")}
@@ -1395,7 +1404,7 @@ function notify(title, body) {
   catch (e) { /* no alert */ }
 }
 
-// one line of the feed has just happened: tell this person if it matters to them
+// something has just happened (the activity log): tell this person if it matters to them
 function announce(e) {
   const mine = pkey(e.who) === pkey(S.me.who), forMe = e.for && pkey(e.for) === pkey(S.me.who);
   if (e.kind === "ready") {
@@ -1406,7 +1415,6 @@ function announce(e) {
   } else if (e.kind === "failed") {
     if (mine) toast(`${e.title} couldn't be charted`);
   } else if (!mine) toast(`${e.who} ${e.text}`);
-  if (!mine && view() !== "party") S.unread++;
 }
 
 async function socialTick(st) {
@@ -1431,42 +1439,25 @@ async function socialTick(st) {
   } catch (e) { /* next tick */ }
 }
 
-// ---------- party: feed, tonight's setlist, people, invite ----------
-let partyTab = "feed";
-const KIND = { added: ["", "Added"], ready: ["green", "Ready"], failed: ["red", "Failed"], published: ["accent", "Live"],
-  downloaded: ["", "Download"], shame: ["yellow", "Shame"], setlist: ["accent", "Setlist"], band: ["accent", "Band"], gig: ["red", "Gig"], score: ["green", "Score"] };
+// ---------- party: tonight's setlist, bands, gigs, people, invite ----------
+let partyTab = "setlist";
 
 async function renderParty(keep = false) {
   if (!keep || !$("#pbody")) {
-    page("Party", "What everyone's adding, tonight's setlist, bands, gigs and who's who.",
-      `<div class="tabs" style="margin-bottom:14px">${[["feed", "Feed"], ["setlist", "Setlist"], ["bands", "Bands"], ["gigs", "Gigs"], ["people", "People"], ["invite", "Invite"]].map(([k, l]) =>
+    page("Backstage", "Tonight's setlist, bands, gigs and who's who.",
+      `<div class="tabs" style="margin-bottom:14px">${[["setlist", "Setlist"], ["bands", "Bands"], ["gigs", "Gigs"], ["people", "People"], ["invite", "Invite"]].map(([k, l]) =>
         `<button class="${partyTab === k ? "on" : ""}" data-ptab="${k}">${l}</button>`).join("")}</div>
       <div id="pbody"><div class="empty"><span class="spinner"></span></div></div>`);
     $$("[data-ptab]").forEach((b) => b.onclick = () => { partyTab = b.dataset.ptab; renderParty(); });
   }
   const tab = partyTab;
   let html;
-  try { html = await { feed: feedHTML, setlist: setlistHTML, bands: bandsHTML, gigs: gigsHTML, people: peopleHTML, invite: inviteHTML }[tab](); }
+  try { html = await { setlist: setlistHTML, bands: bandsHTML, gigs: gigsHTML, people: peopleHTML, invite: inviteHTML }[tab](); }
   catch (e) { html = `<p class="chip red">${esc(e.message)}</p>`; }
   const body = $("#pbody");
   if (!body || view() !== "party" || tab !== partyTab) return;
   body.innerHTML = html;
-  ({ feed: wireFeed, setlist: wireSetlist, bands: wireBands, gigs: wireGigs, people: wirePeople, invite: wireInvite })[tab](body);
-}
-
-async function feedHTML() {
-  const events = (await api("/api/activity")).events.reverse();
-  S.unread = 0; renderNav();
-  const ask = canNotify() && Notification.permission === "default";
-  return `${ask ? `<div class="card row spread wrap" style="gap:10px"><span>Get an alert on this computer when your song is ready.</span><button class="btn small" id="notifyon">Turn on alerts</button></div>` : ""}
-    <div class="card feed">${events.length ? events.map((e) => `<div class="item">${avatar(e.who, e.color)}
-      <div class="grow"><b class="link" style="color:${e.color}" data-user="${esc(e.who)}">${esc(e.who)}</b> ${esc(e.text)}<div class="faint">${since(e.t)}</div></div>
-      <span class="chip ${(KIND[e.kind] || ["", ""])[0]}">${(KIND[e.kind] || ["", e.kind])[1]}</span></div>`).join("")
-      : `<div class="empty">Nothing yet. Add a song and it shows up here for everyone.</div>`}</div>`;
-}
-function wireFeed(body) {
-  const b = $("#notifyon", body);
-  if (b) b.onclick = async () => { const p = await Notification.requestPermission(); toast(p === "granted" ? "Alerts are on" : "Alerts stay off"); renderParty(true); };
+  ({ setlist: wireSetlist, bands: wireBands, gigs: wireGigs, people: wirePeople, invite: wireInvite })[tab](body);
 }
 
 async function setlistHTML() {
@@ -1505,7 +1496,7 @@ async function peopleHTML() {
   const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
   return `<div class="card"><div class="row spread wrap" style="gap:10px"><h2 style="margin:0">Your colour</h2>
         ${S.me.who ? `<div class="row" style="gap:8px"><button class="btn small" id="myavatar">Edit avatar</button><button class="btn small" data-user="${esc(S.me.who)}">My profile</button></div>` : ""}</div>
-      <p class="faint">Shows on your name in the feed and on songs you add. Tap anyone below to see their profile.</p>
+      <p class="faint">Shows on your name and on songs you add. Tap anyone below to see their profile.</p>
       <div class="swatches">${(S.me.colors || []).map((c) => `<button class="swatch${c === S.me.color ? " on" : ""}" data-color="${c}" style="background:${c}" aria-label="Pick this colour"></button>`).join("")}</div></div>
     <div class="people">${list.map((p) => `<div class="card person link" data-user="${esc(p.name)}">${avatar(p.name, p.color, "big" + (p.online ? " on" : ""), false)}
       <div class="grow" style="min-width:0"><div class="ellipsis"><b>${esc(p.name)}</b>${p.me ? ` <span class="faint">(you)</span>` : ""}${p.owner ? ` <span class="chip accent">Host</span>` : ""}</div>
@@ -1971,7 +1962,7 @@ async function renderProfile() {
   if (lastPage !== name) page(esc(name), "", `<div class="empty"><span class="spinner"></span></div>`);
   let p;
   try { [p] = await Promise.all([api("/api/profile?" + qs({ name })), S.peopleList.length ? null : loadPeople()]); }
-  catch (e) { page(esc(name), "", `<div class="card empty">${esc(e.message)}</div>`, `<button class="btn small" data-go="party">&larr; Party</button>`); return; }
+  catch (e) { page(esc(name), "", `<div class="card empty">${esc(e.message)}</div>`, `<button class="btn small" data-go="party">&larr; Backstage</button>`); return; }
   if (view() !== "profile" || hashArg("name") !== name) return;
   const n = (w) => p.songs.filter((s) => s.where === w).length;
   page(esc(p.name), p.me ? "Your profile" : `${esc(p.name)}'s profile`, `
@@ -1984,7 +1975,7 @@ async function renderProfile() {
       </div></div>
     <div class="card"><h2>Bands</h2>${p.bands.length ? `<div class="row wrap" style="gap:10px">${p.bands.map((b) =>
       `<button class="bandchip" data-band="${esc(b.id)}"><span class="bandlogo tiny">${bandArt(b)}</span><b>${esc(b.name)}</b><span class="avstack">${b.members.slice(0, 5).map((m) => avatar(m, "", "", false)).join("")}</span></button>`).join("")}</div>`
-      : `<div class="faint">${p.me ? "Not in a band yet." : `${esc(p.name)} isn't in a band yet.`} <a href="#party" id="tobands">${p.me ? "Start one in Party &rarr; Bands" : "See the bands"}</a></div>`}</div>
+      : `<div class="faint">${p.me ? "Not in a band yet." : `${esc(p.name)} isn't in a band yet.`} <a href="#party" id="tobands">${p.me ? "Start one in Backstage &rarr; Bands" : "See the bands"}</a></div>`}</div>
     <div class="card"><div class="row spread wrap" style="gap:10px"><h2 style="margin:0">Scores</h2>${p.me ? `<button class="btn small primary" id="scoreadd">+ Log a score</button>` : ""}</div>
       ${p.scores.length ? `<div class="faint" style="margin:6px 0 10px">Averages of ${p.me ? "your" : "their"} best on each song</div>${scoreGridHTML(p.scores)}
         <div class="row spread wrap" style="gap:10px;margin:18px 0 6px"><h3 style="margin:0">Top performances</h3>
@@ -1997,7 +1988,7 @@ async function renderProfile() {
         <div class="tabs">${[["all", `All ${p.songs.length}`], ["quickplay", `Quickplay ${n("quickplay")}`], ["staging", `Staging ${n("staging")}`]].map(([k, l]) =>
           `<button class="${prof.where === k ? "on" : ""}" data-pw="${k}">${l}</button>`).join("")}</div></div>
       <input id="profq" type="search" placeholder="Search ${esc(p.name)}'s songs" value="${esc(prof.q)}" style="width:100%;margin:8px 0 4px">
-      <div id="profsongs"></div></div>`, `<button class="btn small" data-go="party">&larr; Party</button>`);
+      <div id="profsongs"></div></div>`, `<button class="btn small" data-go="party">&larr; Backstage</button>`);
   const draw = () => {
     const q = prof.q.toLowerCase().trim();
     const songs = p.songs.filter((s) => (prof.where === "all" || s.where === prof.where) && (!q || `${s.title} ${s.artist} ${s.name}`.toLowerCase().includes(q)));
@@ -2254,7 +2245,7 @@ async function renderBand() {
   const id = hashArg("id");
   let b;
   try { [b] = await Promise.all([api("/api/bands/" + encodeURIComponent(id)), S.peopleList.length ? null : loadPeople()]); }
-  catch (e) { page("Band", "", `<div class="card empty">${esc(e.message)}</div>`, `<button class="btn small" data-go="party">&larr; Party</button>`); return; }
+  catch (e) { page("Band", "", `<div class="card empty">${esc(e.message)}</div>`, `<button class="btn small" data-go="party">&larr; Backstage</button>`); return; }
   if (view() !== "band" || hashArg("id") !== id) return;
   const me = pkey(S.me.who), member = inBand(b), lead = owner() || pkey(b.by) === me, edit = member || owner();
   if (!b.setlists.some((s) => s.id === bandSel)) bandSel = (b.setlists[0] || {}).id || "";
@@ -2301,7 +2292,7 @@ async function renderBand() {
           <div class="grow" style="min-width:0"><b class="ellipsis">${esc(h.name)}</b><div class="faint">${h.state === "live" ? "On now" : since(h.t)}${h.bands > 1 ? ` · ${plural(h.votes, "vote")}` : ""}</div></div>
           ${h.won ? `<span class="chip yellow">Won the battle</span>` : ""}</div>`).join("")
         : `<div class="faint" style="margin-top:8px">No gigs played yet.</div>`}</div>`,
-    `<button class="btn small" data-go="party">&larr; Party</button>${lead ? `<button class="btn small" id="bren">Rename</button><button class="btn small danger" id="bdel">Delete band</button>` : ""}${member ? `<button class="btn small" id="bleave">Leave</button>` : ""}`);
+    `<button class="btn small" data-go="party">&larr; Backstage</button>${lead ? `<button class="btn small" id="bren">Rename</button><button class="btn small danger" id="bdel">Delete band</button>` : ""}${member ? `<button class="btn small" id="bleave">Leave</button>` : ""}`);
 
   const send = async (body, done) => {
     try { const r = await bandOp(id, body); if (r.deleted) { partyTab = "bands"; location.hash = "party"; return; } if (done) done(r); renderBand(); }
@@ -2395,10 +2386,10 @@ async function renderGig() {
   const id = hashArg("id");
   let g, bands;
   try { [g, bands] = await Promise.all([api("/api/gigs/" + encodeURIComponent(id)), api("/api/bands")]); }
-  catch (e) { page("Gig", "", `<div class="card empty">${esc(e.message)}</div>`, `<button class="btn small" data-go="party">&larr; Party</button>`); return; }
+  catch (e) { page("Gig", "", `<div class="card empty">${esc(e.message)}</div>`, `<button class="btn small" data-go="party">&larr; Backstage</button>`); return; }
   if (view() !== "gig" || hashArg("id") !== id) return;
   const run = g.can_run, total = g.lineup.reduce((t, x) => t + x.length, 0);
-  const actions = `<button class="btn small" data-go="party">&larr; Party</button><button class="btn small" id="poster">Poster</button>${run ? `<button class="btn small" id="gren">Rename</button><button class="btn small danger" id="gdel">Delete</button>` : ""}`;
+  const actions = `<button class="btn small" data-go="party">&larr; Backstage</button><button class="btn small" id="poster">Poster</button>${run ? `<button class="btn small" id="gren">Rename</button><button class="btn small danger" id="gdel">Delete</button>` : ""}`;
   const sub = `<span class="chip ${GIG_STATE[g.state][0]}">${GIG_STATE[g.state][1]}</span> Put on by <b class="link" data-user="${esc(g.by)}">${esc(g.by)}</b> · ${plural(g.lineup.length, "band")}${total ? ` · ${fmtLen(total)}` : ""}`;
   let body = "";
   if (g.state === "planned") {
@@ -2413,7 +2404,7 @@ async function renderGig() {
           ${run || x.mine ? `<button class="btn small danger" data-grm="${i}" aria-label="Take off the lineup">&#10005;</button>` : ""}</div></div>`).join("")
       : `<div class="empty">No bands on the lineup yet.</div>`}
       ${free.length ? `<div class="row wrap" style="gap:8px;margin-top:14px"><select id="addband">${free.map((b) => `<option value="${esc(b.id)}">${esc(b.name)}</option>`).join("")}</select><button class="btn small" id="addbandbtn">Add to the lineup</button></div>`
-        : bands.length ? "" : `<p class="faint">No bands yet: start one in Party &rarr; Bands.</p>`}</div>
+        : bands.length ? "" : `<p class="faint">No bands yet: start one in Backstage &rarr; Bands.</p>`}</div>
       ${run ? `<div class="card row spread wrap" style="gap:10px"><span>Ready? Starting the show locks the lineup and opens the voting.</span><button class="btn primary big" id="gstart" ${g.lineup.length ? "" : "disabled"}>Start the show</button></div>` : ""}`;
   } else {
     const x = g.lineup[g.slot] || g.lineup[0], live = g.state === "live";
@@ -2720,7 +2711,7 @@ async function inviteHTML() {
           <p class="faint">They need to be on your Wi-Fi, or on your Tailscale network away from home.</p>
           <button class="btn primary" id="qrbig">Show it big</button></div></div>`
       : owner() ? `<p class="muted">No network address found for this PC, so there's no code to show.</p>`
-      : `<p style="margin:0">Ask <b>${esc(inv.owner)}</b> to open <b>Party → Invite</b> and show the code. Only the host can let new people in.</p>`}</div>
+      : `<p style="margin:0">Ask <b>${esc(inv.owner)}</b> to open <b>Backstage → Invite</b> and show the code. Only the host can let new people in.</p>`}</div>
     <div class="card"><h2>Put RockWizard on your home screen</h2>
       <p class="faint" style="margin-top:0">${standalone() ? "You're already using it from your home screen." : "It opens full screen with its own icon, like any other app."}</p>${HOME_STEPS}</div>`;
 }
