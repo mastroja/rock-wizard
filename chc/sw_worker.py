@@ -1,6 +1,6 @@
 """Stem worker for guitar and bass models trained on BS-RoFormer SW stems (train.separate_sw).
 
-    .tmp/sepenv/Scripts/python -m chc.sw_worker <input.wav> <out_dir>
+    tools/sepenv/Scripts/python -m chc.sw_worker <input.wav> <out_dir>
 
 Runs in the separator's own Python environment (see train.separate_sw for how it is set up and
 why its library versions are pinned). Writes guitar.wav and bass.wav to out_dir and prints "PROGRESS <0..1>"
@@ -17,7 +17,7 @@ import soundfile as sf
 
 ROOT = Path(__file__).resolve().parent.parent
 MODEL = "BS-Roformer-SW.ckpt"
-MODEL_DIR = ROOT / ".tmp" / "sepmodels"
+MODEL_DIR = ROOT / "models" / "sep"
 STEMS = ("guitar", "piano", "other", "bass", "drums", "vocals")
 MAX_LEFT_OUT = 0.4  # same check as train.separate_sw
 

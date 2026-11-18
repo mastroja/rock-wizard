@@ -5,3 +5,5 @@ data/
 models/**/*.pt
 logs/
 .cache/
+tools/sepenv/
+models/sep/

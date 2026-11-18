@@ -15,8 +15,8 @@ from . import analysis, audio, chart, feedback, ml, phrases, rating, structure, 
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 ROOT = Path(__file__).resolve().parent.parent
 # BS-RoFormer SW runs in its own Python environment (see train.separate_sw)
-SW_PYTHON = ROOT / ".tmp" / "sepenv" / "Scripts" / "python.exe"
-SW_MODEL = ROOT / ".tmp" / "sepmodels" / "BS-Roformer-SW.ckpt"
+SW_PYTHON = ROOT / "tools" / "sepenv" / "Scripts" / "python.exe"
+SW_MODEL = ROOT / "models" / "sep" / "BS-Roformer-SW.ckpt"
 STEM_TO_CH = {"other": "guitar", "bass": "bass", "drums": "drums", "vocals": "vocals"}
 STEPS = ["Reading your song", "Splitting it into instruments", "Finding the beat",
          "Writing the notes", "Saving the song folder"]

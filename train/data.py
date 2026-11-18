@@ -132,6 +132,34 @@ def chord_sizes(song: dict, kind: str):
     return [(n[0], min(len(n[1]), 3) - 1) for n in song["notes"][base(kind)]]
 
 
+PART_SHARE = 0.6  # a bar plays a part when at least this share of its notes belong to it
+
+
+def bar_parts(song: dict, kind: str):
+    """Guitar/bass -> [(bar start, bar end, chords, riff)] per bar of the real chart: chords is 1
+    when the bar's notes are mostly chords or held notes (the rhythm part), riff when they are
+    mostly single unheld notes (a riff or lead line). Where a song layers the two, human charters
+    pick one part per section; this is the choice the model learns to make (train --part).
+    A mixed or empty bar is 0 for both."""
+    db = list(song.get("downbeats") or [])
+    notes = [n for n in song["notes"][base(kind)] if len(n) >= 4]
+    if len(db) < 2:
+        return []
+    db.append(db[-1] + (db[-1] - db[-2]))
+    times = np.array([n[0] for n in notes], float)
+    chordy = np.array([len(n[1]) >= 2 or n[2] > 0 for n in notes], bool)
+    bar = np.searchsorted(db, times, side="right") - 1
+    out = []
+    for k in range(len(db) - 1):
+        here = chordy[bar == k]
+        if not len(here):
+            out.append((db[k], db[k + 1], 0, 0))
+            continue
+        c = here.mean()
+        out.append((db[k], db[k + 1], int(c >= PART_SHARE), int(1 - c >= PART_SHARE and len(here) >= 2)))
+    return out
+
+
 def feat_path(i: int, kind: str) -> Path:
     return Path("data/feats") / f"{i:04d}_{kind}.npy"
 

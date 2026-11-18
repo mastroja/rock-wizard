@@ -8,7 +8,7 @@ track), exact frets 34.8% vs 31.2%, extra notes 18.2% vs 22.8%, and far fewer ex
 keyboards. About 37 s a song and 1.4 GB of GPU memory.
 
 Run it with the separator's own Python, not the project's (run_v3h.sh does):
-    .tmp/sepenv/Scripts/python -m train.separate_sw
+    tools/sepenv/Scripts/python -m train.separate_sw
 That environment is a venv whose site-packages has a .pth pointing at the project's .venv (for
 torch), plus `pip install --no-deps audio-separator audioread ml-collections pydub
 "rotary-embedding-torch>=0.6.1,<0.7.0" "beartype==0.23.1"`. The rotary-embedding-torch pin
@@ -31,7 +31,7 @@ from .demucs_feats import full_mix, to_mono22
 from .separate_v3 import save_flac
 
 MODEL = "BS-Roformer-SW.ckpt"
-MODEL_DIR = Path(".tmp/sepmodels")
+MODEL_DIR = Path("models/sep")
 WORK = Path(".tmp/sepwork")  # one song's mix and full-size stems at a time, deleted afterwards
 STEMS = ("guitar", "piano", "other", "bass", "drums", "vocals")
 MAX_LEFT_OUT = 0.4  # share of the song (by RMS) the stems may fail to account for; a sound run leaves ~0.1

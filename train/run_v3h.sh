@@ -8,5 +8,5 @@ cd "$(dirname "$0")/.."
 source train/run_lib.sh
 keep_awake "v3 part 8 separation done"
 log "v3 part 8 separation start"
-step separate_sw ".tmp/sepenv/Scripts/python -m train.separate_sw" data/v3/separate_sw.log
+step separate_sw "tools/sepenv/Scripts/python -m train.separate_sw" data/v3/separate_sw.log
 log "v3 part 8 separation done"

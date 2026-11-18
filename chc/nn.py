@@ -30,6 +30,16 @@ SIZE = ["1 fret", "2 frets", "3 frets"]
 # optional last output (train --onset, after those): a note starts here, whatever its frets.
 # Note times otherwise come from the strongest lane, which blurs in fast runs that change lanes.
 ONSET = ["onset"]
+# optional outputs after all of those (train --part, needs --size): does the real chart play the
+# chord part or the riff in this bar? Where a song layers a riff under chords, human charters pick
+# one per section. predict() leaves them out unless asked, so decoding sees the usual channels.
+PART = ["chord part", "riff part"]
+
+
+def n_part(kind: str, n_out: int) -> int:
+    """How many of a model's outputs are part outputs (PART): only --part models (which need
+    --size) have 15 or 16 guitar/bass outputs."""
+    return len(PART) if instrument(kind) in ("guitar", "bass") and n_out in (15, 16) else 0
 
 
 def instrument(kind: str) -> str:
@@ -104,8 +114,9 @@ class NoteNet(nn.Module):
 
 
 @torch.no_grad()
-def predict(model: NoteNet, feats: np.ndarray, device="cuda", chunk=4096, pad=256) -> np.ndarray:
-    """Probabilities (T, n_out) for a whole song, processed in overlapping chunks."""
+def predict(model: NoteNet, feats: np.ndarray, device="cuda", chunk=4096, pad=256, parts=False) -> np.ndarray:
+    """Probabilities (T, n_out) for a whole song, processed in overlapping chunks. The part
+    outputs (PART) are left off unless parts is set."""
     model.eval()
     if model.layers:  # a chunk's edges should see as far as its middle does
         pad = 1024
@@ -120,7 +131,8 @@ def predict(model: NoteNet, feats: np.ndarray, device="cuda", chunk=4096, pad=25
         p = torch.sigmoid(model(x[a:b][None], prof))[0].cpu().numpy()
         out[start:min(T, start + chunk)] = p[start - a: start - a + min(chunk, T - start)]
         start += chunk
-    return out
+    k = n_part(model.kind, model.n_out)
+    return out if parts or not k else out[:, :-k]
 
 
 def pick(prob: np.ndarray, thresholds, min_gap_frames=3) -> list[tuple[int, int, float]]:
