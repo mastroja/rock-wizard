@@ -27,7 +27,7 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import feedback, library, ml, pipeline, preview, rechart, review, samples, search, social, startup, suggest, tidy, version
+from . import feedback, gamescores, library, ml, pipeline, preview, rechart, review, samples, search, social, startup, suggest, tidy, version
 
 ROOT = Path(__file__).resolve().parent.parent
 WEB = ROOT / "web"
@@ -1008,7 +1008,7 @@ async def cover_upload(request: Request, folder: str = Form(...), file: UploadFi
     try:
         search.write_cover(await file.read(), f)
     except Exception as e:
-        raise HTTPException(400, f"That file isn't an image Clone Hero can use ({e.__class__.__name__})")
+        raise HTTPException(400, f"That file isn't an image the game can use ({e.__class__.__name__})")
     return song_summary(f)
 
 
@@ -1226,7 +1226,7 @@ async def dupes_remove(req: Request):
 
 
 # ---------- settings + status ----------
-SETTING_KEYS = ("songs_dir", "live_dir", "tidy_dir", "charter", "clonehero_exe", "yarg_exe", "moonscraper_exe")
+SETTING_KEYS = ("songs_dir", "live_dir", "tidy_dir", "charter", "clonehero_exe", "yarg_exe", "moonscraper_exe", "deck_scores")
 
 
 @app.get("/api/settings")
@@ -1913,6 +1913,128 @@ def song_scores(folder: str):
     return social.song_scores(song_ref(folder)[3])
 
 
+# ---------- YARG's own scores (chc.gamescores), read on their own ----------
+# Each YARG profile (one per install: release, nightly, the Deck's) is linked to a person here:
+# cfg["yarg_links"] = {profile id: person's name, or "" for "not anyone here"}. A profile with no
+# link goes to the person with its name, if there is one; otherwise its scores wait until it's linked.
+_games = {"lock": threading.Lock(), "seen": None, "last": None}
+
+
+def _people_names() -> list[str]:
+    names = {social.key_of(owner_name()): owner_name()}
+    for d in devices().values():
+        if d.get("name"):
+            names.setdefault(social.key_of(d["name"]), d["name"])
+    return sorted(names.values(), key=str.lower)
+
+
+def _yarg_person(profile_id: str, player: str, people: list[str]) -> str | None:
+    """Whose scores a YARG profile's are: its link, else the person with its name, else nobody yet."""
+    links = cfg.get("yarg_links") or {}
+    if profile_id in links:
+        name = links[profile_id]
+        return next((p for p in people if social.key_of(p) == social.key_of(name)), None) if name else None
+    return next((p for p in people if social.key_of(p) == social.key_of(player)), None)
+
+
+def import_game_scores(announce: bool = True) -> dict:
+    """Log every YARG score that beats its person's best here."""
+    with _games["lock"]:
+        index, people = _song_lookup(), _people_names()
+        files, added, unmatched, waiting = [], 0, 0, 0
+        for f in gamescores.sources(cfg.get("deck_scores", "")):
+            try:
+                rows = gamescores.read_yarg(f)
+            except Exception as e:
+                files.append({"path": str(f), "where": gamescores.where(f),
+                              "error": str(e).splitlines()[0] if str(e) else e.__class__.__name__})
+                continue
+            new, bests = 0, {}
+            for r in rows:
+                name = _yarg_person(r["profile"], r["player"], people)
+                if not name:
+                    waiting += 1
+                    continue
+                song = index.get(social.song_key(r["artist"], r["title"]))
+                if not song:
+                    unmatched += 1
+                    continue
+                if name not in bests:
+                    bests[name] = {(s["key"], s["inst"], s["diff"]): s["pct"] for s in social.scores_of(name)}
+                k = (song["key"], r["inst"], r["diff"])
+                if bests[name].get(k, -1) >= r["pct"]:
+                    continue
+                social.score_add(name, song["key"], song["artist"], song["title"], r["inst"], r["diff"], r["pct"])
+                bests[name][k] = r["pct"]
+                new += 1
+                if announce:
+                    social.log("score", name, f"scored {r['pct']:g}% on {r['diff'].title()} {r['inst']} in YARG: "
+                               f"{song['title'] or song['artist']}", folder=song["folder"], pct=r["pct"])
+            files.append({"path": str(f), "where": gamescores.where(f), "scores": len(rows), "new": new})
+            added += new
+        _games["last"] = {"t": time.time(), "files": files, "added": added, "unmatched": unmatched, "waiting": waiting}
+        return _games["last"]
+
+
+def _score_files_state() -> tuple:
+    out = []
+    for f in gamescores.sources(cfg.get("deck_scores", "")):
+        try:
+            out.append((str(f), f.stat().st_mtime))
+        except OSError:
+            pass
+    return tuple(out) + (json.dumps(cfg.get("yarg_links") or {}, sort_keys=True),)
+
+
+def game_scores_watch():
+    """Reads YARG's score files whenever one changes (checked every two minutes). The first look
+    after the server starts logs quietly: those scores aren't news."""
+    while True:
+        try:
+            state = _score_files_state()
+            if state != _games["seen"]:
+                first = _games["seen"] is None
+                _games["seen"] = state
+                import_game_scores(announce=not first)
+        except Exception:
+            traceback.print_exc()
+        time.sleep(120)
+
+
+@app.get("/api/gamescores")
+def game_scores(request: Request):
+    """YARG's score files, their profiles and who each is linked to, and the last read."""
+    require_owner(request)
+    files = gamescores.sources(cfg.get("deck_scores", ""))
+    people, links = _people_names(), cfg.get("yarg_links") or {}
+    profs = [p | {"person": _yarg_person(p["id"], p["name"], people) or "", "linked": p["id"] in links}
+             for p in gamescores.profiles(files)]
+    return {"files": [str(f) for f in files], "profiles": profs, "people": people, "last": _games["last"]}
+
+
+@app.post("/api/gamescores/link")
+async def game_scores_link(req: Request):
+    """Link a YARG profile to a person: {profile, person} ("" for nobody here); then read again."""
+    require_owner(req)
+    b = await req.json()
+    pid, person = str(b.get("profile", "")), str(b.get("person", ""))
+    if not pid:
+        raise HTTPException(400, "Which YARG profile?")
+    if person and person not in _people_names():
+        raise HTTPException(400, f"No one here is called {person}")
+    cfg["yarg_links"] = (cfg.get("yarg_links") or {}) | {pid: person}
+    save_config(cfg)
+    r = import_game_scores(announce=True)
+    _games["seen"] = _score_files_state()
+    return r
+
+
+@app.post("/api/gamescores/import")
+def game_scores_import(request: Request):
+    require_owner(request)
+    return import_game_scores(announce=True)
+
+
 @app.get("/api/hearts")
 def hearts(request: Request):
     return {"mine": social.hearts_of(who(request)), "counts": social.heart_counts()}
@@ -2031,6 +2153,7 @@ def serve(host="0.0.0.0", port=PORT):
     global _uvicorn
     import uvicorn
     _uvicorn = uvicorn.Server(uvicorn.Config(app, host=host, port=port, log_level="warning"))
+    threading.Thread(target=game_scores_watch, daemon=True).start()  # only in the real server, not on import
     _uvicorn.run()
 
 

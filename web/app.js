@@ -1021,10 +1021,10 @@ It goes to the Recycle Bin, so you can still get it back. The Deck drops it on t
   $("#remove", dr).onclick = () => deleteFromStaging(s.folder, s.title || s.name);
 }
 
-const GAMES = [["yarg", "YARG"], ["clonehero", "Clone Hero"]];
-const savedGame = () => { try { return localStorage.getItem("play_game") || "yarg"; } catch (e) { return "yarg"; } };
-const playHTML = () => `<div class="play"><button class="btn" id="play">${ICON.play} Play</button>
-  <select id="game" aria-label="Game to play in">${GAMES.map(([k, l]) => `<option value="${k}" ${savedGame() === k ? "selected" : ""}>${l}</option>`).join("")}</select></div>`;
+const GAMES = [["yarg", "YARG"]];  // Clone Hero is hidden for now (the server can still open it)
+const savedGame = () => { try { const g = localStorage.getItem("play_game"); return GAMES.some(([k]) => k === g) ? g : GAMES[0][0]; } catch (e) { return GAMES[0][0]; } };
+const playHTML = () => `<div class="play"><button class="btn" id="play">${ICON.play} Play${GAMES.length === 1 ? ` in ${GAMES[0][1]}` : ""}</button>
+  <select id="game" aria-label="Game to play in" ${GAMES.length === 1 ? "hidden" : ""}>${GAMES.map(([k, l]) => `<option value="${k}" ${savedGame() === k ? "selected" : ""}>${l}</option>`).join("")}</select></div>`;
 
 function moreHTML(s, live, local) {
   const items = [
@@ -1267,7 +1267,6 @@ async function renderSettings() {
       ${field("songs_dir", "Staging folder", "New charts are saved here for review first.")}
       ${field("live_dir", "Live folder", "Where published songs go (your Quickplay folder, which Syncthing sends to the Deck).")}
       ${field("charter", "Charter name", "Written into each song.", "")}
-      ${field("clonehero_exe", "Clone Hero", "Clone Hero.exe, for Play in Clone Hero.", "file")}
       ${field("yarg_exe", "YARG", "YARG.exe, for Play in YARG.", "file")}
       ${field("moonscraper_exe", "Moonscraper", "Moonscraper Chart Editor.exe, for Open in Moonscraper.", "file")}
       <button class="btn primary" id="save" style="margin-top:16px">Save</button></div>
@@ -1277,6 +1276,12 @@ async function renderSettings() {
       <div id="board"><span class="spinner"></span></div></details>
     <div class="card" id="phone"><h2>Use RockWizard on your phone</h2><div class="empty"><span class="spinner"></span></div></div>
     <div class="card"><h2>Steam Deck sync</h2><div id="syncbox" class="muted"></div></div>
+    <div class="card"><h2>YARG scores</h2>
+      <p class="muted" style="margin-top:0">YARG's own scores land on the Scores page by themselves: new bests show up within a couple of minutes. Link each YARG profile to someone here; a profile with the same name as someone is theirs until you change it. Every YARG install (release, nightly, the Deck's) has its own profiles.</p>
+      <div id="gsprof"><span class="spinner"></span></div>
+      <div id="gsbox" class="faint" style="margin-top:12px"></div>
+      ${field("deck_scores", "Steam Deck scores folder", "A folder Syncthing brings over from the Deck with YARG's scores.db in it. YARG's score files on this PC are read without it.")}
+      <div class="row wrap" style="gap:8px;margin-top:12px"><button class="btn" id="gssave">Save folder</button><button class="btn" id="gsimport">Import now</button></div></div>
     <div class="card"><h2>YouTube downloader</h2><p class="muted" style="margin-top:0">YouTube changes often and older downloader versions stop working. If searching or downloading fails, update it.</p>
       <button class="btn" id="dl">Update downloader</button> <span id="dlmsg" class="faint"></span></div>
     <div class="card"><h2>Advanced</h2>
@@ -1292,13 +1297,44 @@ async function renderSettings() {
       <span class="${x.steps ? "chip green" : "faint"}">${x.steps ? `Adjusting · ${Math.abs(x.net)} charts` : `${Math.abs(x.net)} of ${x.needs} charts`}</span></div>`).join("")
       || `<p class="faint" style="margin:0">Nothing yet. Rate a part OK or Bad on a RockWizard song and tap what's off.</p>`;
   }).catch((e) => { const box = $("#learned"); if (box) box.innerHTML = `<p class="chip red">${esc(e.message)}</p>`; });
+  const gsLast = (last) => {
+    const box = $("#gsbox"); if (!box || !last) return;
+    box.innerHTML = last.files.map((f) => `<div>YARG ${esc(f.where)}: ${f.error ? `<span class="chip red">${esc(f.error)}</span>` : `${f.scores} plays${f.new ? `, ${f.new} new bests` : ""}`}</div>`).join("")
+      + `<div style="margin-top:6px">Last read ${since(last.t)}${last.waiting ? ` · ${last.waiting} ${last.waiting === 1 ? "play waits" : "plays wait"} for a profile to be linked` : ""}${last.unmatched ? ` · ${last.unmatched} ${last.unmatched === 1 ? "play is on a song that isn't" : "plays are on songs that aren't"} here` : ""}</div>`;
+  };
+  const gsShow = (g) => {
+    const box = $("#gsprof"); if (!box) return;
+    if (!g.files.length) { box.innerHTML = `<p class="faint" style="margin:0">YARG's score files aren't on this PC yet. They appear once you've played a song in YARG.</p>`; return; }
+    box.innerHTML = g.profiles.map((p) => `<div class="item"><div class="grow"><b>${esc(p.name || "No name")}</b>
+        <div class="faint">YARG ${esc(p.where)} · ${p.plays} ${p.plays === 1 ? "play" : "plays"}${!p.linked && p.person ? " · same name as someone here" : ""}</div></div>
+        <select data-yprof="${esc(p.id)}" aria-label="Who plays as ${esc(p.name)}"><option value="">Not linked</option>
+          ${g.people.map((n) => `<option value="${esc(n)}" ${n === p.person ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></div>`).join("")
+      || `<p class="faint" style="margin:0">No YARG profiles found.</p>`;
+    $$("[data-yprof]", box).forEach((sel) => sel.onchange = async () => {
+      try {
+        const r = await post("/api/gamescores/link", { profile: sel.dataset.yprof, person: sel.value });
+        gsLast(r);
+        toast(sel.value ? `Linked to ${sel.value}${r.added ? ` · ${r.added} new bests` : ""}` : "Not linked");
+      } catch (e) { toast(e.message); }
+    });
+    gsLast(g.last);
+  };
+  api("/api/gamescores").then(gsShow).catch((e) => { const box = $("#gsprof"); if (box) box.innerHTML = `<span class="chip red">${esc(e.message)}</span>`; });
+  $("#gssave").onclick = async () => {
+    try { Object.assign(S.settings, await post("/api/settings", { deck_scores: $("#deck_scores").value })); gsShow(await api("/api/gamescores")); toast("Saved"); }
+    catch (e) { toast(e.message); }
+  };
+  $("#gsimport").onclick = async () => {
+    try { const r = await post("/api/gamescores/import"); gsLast(r); toast(r.added ? `${r.added} new bests on the Scores page` : "No new bests"); }
+    catch (e) { toast(e.message); }
+  };
   $("#boardcard").addEventListener("toggle", () => { if ($("#boardcard").open && !$("#board table")) loadScoreboard(); });
   $$("[data-pick]").forEach((b) => b.onclick = async () => {
     const v = b.dataset.kind === "file" ? await desk().pick_file() : await desk().pick_folder();
     if (v) $("#" + b.dataset.pick).value = v;
   });
   $("#save").onclick = async () => {
-    const body = {}; ["songs_dir", "live_dir", "charter", "clonehero_exe", "yarg_exe", "moonscraper_exe"].forEach((k) => body[k] = $("#" + k).value);
+    const body = {}; ["songs_dir", "live_dir", "charter", "yarg_exe", "moonscraper_exe"].forEach((k) => body[k] = $("#" + k).value);
     Object.assign(S.settings, await post("/api/settings", body)); toast("Saved");
   };
   $("#dl").onclick = async () => { $("#dlmsg").textContent = "Updating…"; const r = await post("/api/downloader/update"); $("#dlmsg").textContent = r.message; };
@@ -1983,7 +2019,7 @@ async function renderProfile() {
             `<button class="${prof.sinst === k ? "on" : ""}" data-sinst="${k}">${k === "all" ? "All" : cap(k)}</button>`).join("")}</div>
           <div class="tabs">${[["best", "Best"], ["new", "Newest"]].map(([k, l]) => `<button class="${prof.ssort === k ? "on" : ""}" data-ssort="${k}">${l}</button>`).join("")}</div></div></div>
         <div id="profscores"></div>`
-      : `<div class="empty">${p.me ? "No scores yet. Played a song in Clone Hero? Log your percentage here, or from the song's page." : `${esc(p.name)} hasn't logged any scores yet.`}</div>`}</div>
+      : `<div class="empty">${p.me ? "No scores yet. Play in YARG with a linked profile (Settings) and your scores show up here by themselves, or log one from the song's page." : `${esc(p.name)} hasn't logged any scores yet.`}</div>`}</div>
     <div class="card"><div class="row spread wrap" style="gap:10px;margin-bottom:6px"><h2 style="margin:0">Songs added</h2>
         <div class="tabs">${[["all", `All ${p.songs.length}`], ["quickplay", `Quickplay ${n("quickplay")}`], ["staging", `Staging ${n("staging")}`]].map(([k, l]) =>
           `<button class="${prof.where === k ? "on" : ""}" data-pw="${k}">${l}</button>`).join("")}</div></div>
@@ -2573,7 +2609,7 @@ const POSTER_SIZES = { poster: ["Poster", 600, 900], square: ["Square", 600, 600
 const posterDefaults = (g) => ({
   style: "arena", size: "poster", logos: true, setnames: true, counts: true, songs: false, headliner: false,
   top: "RockWizard presents", when: new Date((g.started || g.t) * 1000).toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" }), where: "",
-  foot: g.lineup.length > 1 ? "Battle of the bands · vote in RockWizard" : "Live in Clone Hero",
+  foot: g.lineup.length > 1 ? "Battle of the bands · vote in RockWizard" : "Live in YARG",
 });
 
 async function posterSVG(g, o = posterDefaults(g)) {

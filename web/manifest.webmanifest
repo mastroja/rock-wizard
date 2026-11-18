@@ -1,7 +1,7 @@
 {
   "name": "RockWizard",
   "short_name": "RockWizard",
-  "description": "Turn any song into a Clone Hero chart.",
+  "description": "Turn any song into a YARG chart.",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#0c0d1a",

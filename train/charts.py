@@ -6,6 +6,12 @@ from pathlib import Path
 import mido
 
 TRACKS = {"PART GUITAR": "guitar", "PART BASS": "bass", "PART DRUMS": "drums", "PART DRUM": "drums"}
+# five-fret parts read by parse_mid only (parse_levels leaves them out)
+EXTRA = {"PART RHYTHM": "rhythm", "PART KEYS": "keys"}
+TAP = 104  # Clone Hero's tap marker note
+# Phase Shift sysex events (most charts mark taps this way): 'P' 'S' 0 0 <difficulty> <type> <on>;
+# difficulty 3 is Expert and 127 all of them, type 4 is tap
+PS_HEAD, PS_TAP, PS_DIFFS = (80, 83, 0, 0), 4, (3, 127)
 STEM_EXT = (".ogg", ".opus", ".mp3", ".wav")
 
 
@@ -58,6 +64,21 @@ def _notes(track):
     return out
 
 
+def _tap_spans(track) -> list[tuple[int, int]]:
+    """(start tick, end tick) of the tap sections of an Expert part: note 104, or Phase Shift sysex."""
+    out, tick, on = [], 0, {}
+    for m in track:
+        tick += m.time
+        if m.type == "sysex" and tuple(m.data[:4]) == PS_HEAD and len(m.data) >= 7                 and m.data[4] in PS_DIFFS and m.data[5] == PS_TAP:
+            if m.data[6]:
+                on.setdefault("ps", tick)
+            elif "ps" in on:
+                a = on.pop("ps")
+                out.append((a, max(tick, a + 1)))
+    out += [(a, max(b, a + 1)) for a, n, b in _notes(track) if n == TAP]
+    return sorted(out)
+
+
 def solo_spans(path: Path, delay: float = 0.0) -> list[tuple[float, float]]:
     """Guitar solo sections marked in a notes.mid (note 103), in seconds."""
     mid = mido.MidiFile(str(path), clip=True)
@@ -68,17 +89,20 @@ def solo_spans(path: Path, delay: float = 0.0) -> list[tuple[float, float]]:
     return []
 
 
-def parse_mid(path: Path) -> dict:
-    """Return {'guitar': [(t, lanes)], 'bass': [...], 'drums': [(t, lane, tom)], 'five_lane': bool}.
+def parse_mid(path) -> dict:
+    """Return {'guitar': [(t, lanes, length, hopo)], 'bass', 'rhythm', 'keys': the same,
+    'drums': [(t, lane, tom)], 'five_lane': bool, 'taps': {part: [t of tapped notes]}}.
 
-    guitar/bass lanes is a sorted tuple of 0-4. drums lane: 0 kick, 1 red, 2 yellow, 3 blue, 4 green
-    (orange in five-lane charts); tom is True for tom hits on yellow/blue/green.
+    path is a notes.mid or an already open mido.MidiFile. Lanes is a sorted tuple of 0-4. drums
+    lane: 0 kick, 1 red, 2 yellow, 3 blue, 4 green (orange in five-lane charts); tom is True for
+    tom hits on yellow/blue/green.
     """
-    mid = mido.MidiFile(str(path), clip=True)
+    mid = path if isinstance(path, mido.MidiFile) else mido.MidiFile(str(path), clip=True)
     tm = TempoMap(mid)
-    out = {"guitar": [], "bass": [], "drums": [], "five_lane": False}
+    out = {"guitar": [], "bass": [], "rhythm": [], "keys": [], "drums": [], "five_lane": False, "taps": {}}
     for tr in mid.tracks:
-        kind = TRACKS.get(tr.name.strip().upper())
+        name = tr.name.strip().upper()
+        kind = TRACKS.get(name) or EXTRA.get(name)
         if not kind:
             continue
         notes = _notes(tr)
@@ -127,6 +151,10 @@ def parse_mid(path: Path) -> dict:
                     merged.append(last)
             thr = mid.ticks_per_beat // 3 + 1  # natural HOPO distance
             res, prev = [], None
+            taps = _tap_spans(tr)
+            tapped = [tm.sec(tick) for tick, _, _ in merged if any(a <= tick < b for a, b in taps)]
+            if tapped:
+                out["taps"][kind] = tapped
             for tick, lanes, end in merged:
                 natural = (prev is not None and tick - prev[0] <= thr and len(lanes) == 1
                            and lanes != prev[1])
@@ -176,6 +204,18 @@ def parse_levels(path: Path) -> dict:
                 levels[level] = [(t, tuple(sorted(l))) for t, l in sorted(by.items())]
         out[kind] = levels
     return out
+
+
+def open_chart(folder: Path) -> mido.MidiFile:
+    """A song folder's chart as a MidiFile: its notes.mid, or its notes.chart carried over to MIDI
+    (chc.rechart, which folds a .chart Offset into the tempo map; song.ini's delay still applies)."""
+    if (folder / "notes.mid").exists():
+        return mido.MidiFile(str(folder / "notes.mid"), clip=True)
+    from chc import rechart
+    src = rechart.load(folder)
+    mid = mido.MidiFile(type=1, ticks_per_beat=rechart.TPQ)
+    mid.tracks += src.base + [src.parts[i] for i in rechart.INSTS if i in src.parts]
+    return mid
 
 
 def beat_times(mid: mido.MidiFile, tm: TempoMap) -> tuple[list[float], list[float]]:
@@ -235,10 +275,10 @@ def index_library(root: Path, convert_five: bool = False) -> list[dict]:
     convert_five keeps five-lane drum charts (converted to four-lane) instead of dropping them.
     """
     songs, extra = [], []
-    for mid_path in sorted(root.rglob("notes.mid")):
-        folder = mid_path.parent
+    found = sorted(set(p.parent for p in root.rglob("notes.mid")) | set(p.parent for p in root.rglob("notes.chart")))
+    for folder in found:
         ini = read_ini(folder / "song.ini")
-        if ini.get("chc_filled"):  # partly generated by this app (chc.rechart): not a human reference
+        if ini.get("chc_filled") or ini.get("chc_generated"):  # made (or partly made) by this app: not a human reference
             continue
         if ini.get("chc_my_chart", "0") not in ("", "0"):  # the owner's own charts are often unfinished
             continue
@@ -247,11 +287,11 @@ def index_library(root: Path, convert_five: bool = False) -> list[dict]:
         except ValueError:
             delay = 0.0
         try:
-            chart = parse_mid(mid_path)
+            mid = open_chart(folder)
+            chart = parse_mid(mid)
         except Exception:
             continue
         try:
-            mid = mido.MidiFile(str(mid_path), clip=True)
             bt, dt = beat_times(mid, TempoMap(mid))
         except Exception:
             bt, dt = [], []
@@ -276,6 +316,15 @@ def index_library(root: Path, convert_five: bool = False) -> list[dict]:
             rec["notes"]["bass"] = [(t + delay, list(l), ln, int(h)) for t, l, ln, h in chart["bass"]]
             if b:
                 rec["stems"]["bass"] = [str(b)]
+        for part in ("rhythm", "keys"):
+            if chart[part]:
+                rec["notes"][part] = [(t + delay, list(l), ln, int(h)) for t, l, ln, h in chart[part]]
+                st = find_stem(folder, part)
+                if st:
+                    rec["stems"][part] = [str(st)]
+        taps = {k: [t + delay for t in v] for k, v in chart["taps"].items() if k in rec["notes"]}
+        if taps:
+            rec["taps"] = taps
         if chart["drums"] and (convert_five or not rec["five_lane"]):
             rec["notes"]["drums"] = [(t + delay, lane, int(tom)) for t, lane, tom in chart["drums"]]
             if d:

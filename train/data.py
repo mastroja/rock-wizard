@@ -15,7 +15,8 @@ def load_index(path="data/index.json"):
 
 
 def split_of(song: dict) -> str:
-    h = zlib.crc32(song["name"].encode("utf-8")) % 100
+    """train / val / test, from the song's name (split_key keeps a renamed song where it was)."""
+    h = zlib.crc32(song.get("split_key", song["name"]).encode("utf-8")) % 100
     return "val" if h < 5 else "test" if h < 10 else "train"
 
 
@@ -24,8 +25,9 @@ def base(kind: str) -> str:
 
 
 def song_id(song: dict) -> str:
-    """Stable name for a song's cached files (positions in the index change as songs are added)."""
-    return f"{zlib.crc32(song['folder'].encode('utf-8')):08x}"
+    """Stable name for a song's cached files (positions in the index change as songs are added).
+    A song whose folder was renamed keeps its old id (build_index --keep-ids)."""
+    return song.get("id") or f"{zlib.crc32(song['folder'].encode('utf-8')):08x}"
 
 
 V3 = Path("data/v3")
