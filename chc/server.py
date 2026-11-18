@@ -1948,6 +1948,16 @@ async def score_remove(req: Request):
     return {"ok": True}
 
 
+@app.post("/api/scores/reset")
+async def scores_reset(req: Request):
+    """Start someone's score history over (host only): {person}. Older YARG plays stay out."""
+    require_owner(req)
+    name = str((await req.json()).get("person", "")).strip()
+    if name not in _people_names():
+        raise HTTPException(400, f"No one here is called {name}")
+    return {"removed": social.scores_reset(name)}
+
+
 @app.get("/api/scores/song")
 def song_scores(folder: str):
     """Everyone's best on one song."""
@@ -1999,6 +2009,8 @@ def import_game_scores(announce: bool = True) -> dict:
                     waiting += 1
                     continue
                 name = social.player_at(name, r["t"]) or name
+                if r["t"] < social.scores_from(name):  # from before their history was reset
+                    continue
                 if not social.counts(name, r["inst"], r["diff"]):
                     skipped += 1
                     continue

@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RockWizard Progress and Roadmap</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+/* RockWizard's own palette (web/app.css), one dark world like the app.
+   Layout: a single reading column; features as a grid of groups; training as numbers first, then the story. */
+:root {
+  --bg: #0c0d1a;
+  --surface: #171a33;
+  --surface2: #1e2242;
+  --border: #2a2f57;
+  --text: #eef0ff;
+  --muted: #a3a9d1;
+  --faint: #7a80a8;
+  --accent: #8b5cff;
+  --accent2: #d54cff;
+  --hot: #ff4ca8;
+  --good: #35d08b;
+  --warn: #ffb547;
+  --bad: #ff5d72;
+  --grad: linear-gradient(135deg, #7c5cff 0%, #b14cff 55%, #ff4ca8 100%);
+  --body: "Segoe UI Variable Text", "Segoe UI", "Figtree", system-ui, -apple-system, Roboto, sans-serif;
+  --display: "Segoe UI Variable Display", "Segoe UI", "Figtree", system-ui, -apple-system, sans-serif;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html { background: var(--bg); }
+body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--body); font-size: 16px; line-height: 1.55; }
+.wrap { max-width: 1040px; margin: 0 auto; padding: 40px 20px 80px; display: grid; gap: 56px; }
+h1, h2, h3 { font-family: var(--display); text-wrap: balance; margin: 0; line-height: 1.15; }
+h1 { font-size: clamp(32px, 5vw, 46px); font-weight: 800; letter-spacing: -0.5px; }
+h1 span { background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
+h2 { font-size: 28px; font-weight: 750; }
+h3 { font-size: 18px; font-weight: 700; }
+p { margin: 0; max-width: 68ch; }
+.muted { color: var(--muted); }
+.faint { color: var(--faint); font-size: 14px; }
+.num { font-variant-numeric: tabular-nums; }
+section { display: grid; gap: 20px; }
+.sec-head { display: grid; gap: 8px; }
+.sec-head::after { content: ""; width: 64px; height: 4px; border-radius: 2px; background: var(--grad); }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 20px; }
+
+/* top */
+header { display: grid; gap: 14px; }
+.status { display: flex; flex-wrap: wrap; gap: 10px; }
+.pill { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px; font-size: 14px; font-weight: 600;
+  background: var(--surface2); border: 1px solid var(--border); color: var(--muted); }
+.pill i { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
+.pill.live { color: var(--text); border-color: rgba(139, 92, 255, .6); }
+.pill.live i { background: var(--accent); box-shadow: 0 0 0 4px rgba(139, 92, 255, .25); }
+
+/* how it works */
+.flow { display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; counter-reset: step; }
+.flow > div { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px; display: grid; gap: 4px; align-content: start; }
+.flow b { font-size: 15px; }
+.flow b::before { counter-increment: step; content: counter(step); display: inline-grid; place-items: center; width: 22px; height: 22px; margin-right: 8px;
+  border-radius: 50%; background: var(--grad); color: #fff; font-size: 12px; font-weight: 800; }
+.flow span { color: var(--muted); font-size: 14px; }
+@media (max-width: 900px) { .flow { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 520px) { .flow { grid-template-columns: 1fr; } }
+
+/* features */
+.groups { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
+@media (max-width: 760px) { .groups { grid-template-columns: 1fr; } }
+.group { display: grid; gap: 12px; align-content: start; }
+.group ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.group li { display: grid; gap: 2px; padding-left: 14px; border-left: 2px solid var(--border); }
+.group li b { font-weight: 650; }
+.group li span { color: var(--muted); font-size: 14.5px; }
+.tag { font-size: 12px; font-weight: 700; letter-spacing: .3px; color: var(--accent2); text-transform: uppercase; }
+
+/* training numbers */
+.gap-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+@media (max-width: 760px) { .gap-grid { grid-template-columns: 1fr; } }
+.gap { display: grid; gap: 10px; }
+.gap .big { font-family: var(--display); font-size: 40px; font-weight: 800; line-height: 1; }
+.gap .big small { font-size: 16px; font-weight: 600; color: var(--muted); }
+.bar { position: relative; height: 12px; border-radius: 6px; background: var(--surface2); overflow: hidden; }
+.bar > i { position: absolute; inset: 0 auto 0 0; border-radius: 6px; background: var(--grad); }
+.gap dl { margin: 0; display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; font-size: 14px; color: var(--muted); }
+.gap dd { margin: 0; color: var(--text); font-variant-numeric: tabular-nums; text-align: right; }
+
+.chart { overflow-x: auto; }
+.chart svg { display: block; width: 100%; min-width: 560px; height: auto; }
+
+table { width: 100%; border-collapse: collapse; font-size: 15px; }
+th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+th { color: var(--faint); font-size: 12.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; }
+td.num { white-space: nowrap; }
+.table { overflow-x: auto; padding: 4px 8px; }
+.model { font-weight: 700; white-space: nowrap; }
+.up { color: var(--good); font-weight: 650; }
+.flat { color: var(--warn); font-weight: 650; }
+.down { color: var(--bad); font-weight: 650; }
+
+.twocol { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 760px) { .twocol { grid-template-columns: 1fr; } }
+.list { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+.list li { display: grid; gap: 2px; }
+.list li span { color: var(--muted); font-size: 14.5px; }
+
+.now { border-color: rgba(139, 92, 255, .55); background: linear-gradient(180deg, rgba(139, 92, 255, .12), rgba(139, 92, 255, 0) 60%), var(--surface); display: grid; gap: 14px; }
+.hopes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+@media (max-width: 760px) { .hopes { grid-template-columns: 1fr; } }
+.hopes > div { background: var(--surface2); border-radius: 10px; padding: 14px; display: grid; gap: 4px; align-content: start; }
+.hopes span { color: var(--muted); font-size: 14.5px; }
+
+.road { display: grid; gap: 10px; counter-reset: r; }
+.road > div { display: grid; grid-template-columns: 38px 1fr auto; gap: 14px; align-items: start; padding: 14px 16px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; }
+.road > div::before { counter-increment: r; content: counter(r); display: grid; place-items: center; width: 30px; height: 30px; border-radius: 9px;
+  background: var(--surface2); color: var(--accent2); font-weight: 800; font-family: var(--display); }
+.road > div.active::before { background: var(--grad); color: #fff; }
+.road b { font-weight: 650; }
+.road span { color: var(--muted); font-size: 14.5px; display: block; }
+.road em { font-style: normal; font-size: 12.5px; font-weight: 700; padding: 3px 9px; border-radius: 999px; background: var(--surface2); color: var(--muted); white-space: nowrap; }
+.road .active em { background: rgba(139, 92, 255, .25); color: var(--text); }
+@media (max-width: 520px) { .road > div { grid-template-columns: 30px 1fr; } .road em { grid-column: 2; justify-self: start; } }
+footer { color: var(--faint); font-size: 13.5px; }
+html, body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>Rock<span>Wizard</span></h1>
+  <p class="muted" style="font-size:18px">Pick a song and RockWizard writes a playable YARG chart for it: guitar, bass, drums and vocals, on every difficulty. It runs on a home PC, friends use it from their phones, and the charts land on the Steam Deck by themselves. This page lists what it does, how its models have improved, and what's next.</p>
+  <div class="status">
+    <span class="pill live"><i></i>Training run 11 in progress</span>
+    <span class="pill"><i></i>Guitar 7 · Bass 5 · Drums 2 in the app</span>
+    <span class="pill"><i></i>959 human charts to learn from</span>
+    <span class="pill"><i></i>As of Nov 18, 2026</span>
+  </div>
+</header>
+
+<section>
+  <div class="sec-head"><h2>How a chart gets made</h2></div>
+  <div class="flow">
+    <div><b>Find a song</b><span>Search by name, paste a YouTube link, or upload your own file.</span></div>
+    <div><b>Split it</b><span>BS-RoFormer separates guitar, bass, drums and vocals into their own stems.</span></div>
+    <div><b>Write notes</b><span>Trained models listen to each stem and place the notes; Whisper writes the lyrics.</span></div>
+    <div><b>Tidy it</b><span>A beat grid, repeated sections charted alike, then Hard, Medium and Easy.</span></div>
+    <div><b>Review</b><span>Watch the chart on the note highway in Staging, then publish.</span></div>
+    <div><b>Play</b><span>It goes to Quickplay and syncs to the Steam Deck through Syncthing.</span></div>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head"><h2>Features</h2><p class="muted">Everything built since Oct 23, grouped by what you do with it.</p></div>
+  <div class="groups">
+    <div class="card group">
+      <span class="tag">Making charts</span>
+      <ul>
+        <li><b>Search first</b><span>Finds existing community charts, song details and YouTube sources in one search.</span></li>
+        <li><b>Suggested songs</b><span>A new batch every week from the iTunes charts, bands you already play and hand picks, with clips to hear first.</span></li>
+        <li><b>Queue with votes</b><span>One song at a time on the graphics card; friends vote for what goes next.</span></li>
+        <li><b>Every difficulty</b><span>Hard, Medium and Easy are cut down from Expert by a model trained on how human charters do it.</span></li>
+        <li><b>Vocals with lyrics</b><span>A PART VOCALS track with pitched notes, lyrics and phrases, for YARG.</span></li>
+        <li><b>Repeats charted alike</b><span>A chorus plays the same every time it comes back, like a human chart.</span></li>
+        <li><b>Difficulty ratings</b><span>Each part gets a 0–6 rating the game shows.</span></li>
+      </ul>
+    </div>
+    <div class="card group">
+      <span class="tag">Reviewing and the library</span>
+      <ul>
+        <li><b>Note highway</b><span>Watch any chart scroll by with the song, for guitar, bass or drums.</span></li>
+        <li><b>Staging, then Quickplay</b><span>New charts wait in Staging until you mark them good and publish.</span></li>
+        <li><b>Rechart</b><span>Remake one song, Cleaner (fewer notes) or Busier (more fast notes).</span></li>
+        <li><b>Update charts</b><span>Remakes the songs that are behind today's models, backing up the old chart first; hand-edited charts are left alone.</span></li>
+        <li><b>Tidy, duplicates, covers</b><span>Fixes "Artist - Title" names, finds duplicate songs, and fetches missing album art.</span></li>
+        <li><b>Version records</b><span>Every chart notes which models and charting version made it.</span></li>
+        <li><b>Play ratings</b><span>Rate a chart after playing it; ratings tune how future charts are made.</span></li>
+      </ul>
+    </div>
+    <div class="card group">
+      <span class="tag">Backstage with friends</span>
+      <ul>
+        <li><b>Join from a phone</b><span>Scan a QR code on the same Wi-Fi (or over Tailscale away from home); it installs like an app.</span></li>
+        <li><b>Profiles and avatars</b><span>A builder or your own photo; songs you add carry your name.</span></li>
+        <li><b>Bands</b><span>Names (or roll the dice), logos, band pictures, roles, set lists and a band tee.</span></li>
+        <li><b>Gigs</b><span>Gig nights, battle of the bands, likes and posters in several styles.</span></li>
+        <li><b>Tonight's setlist</b><span>One shared list everyone can add to.</span></li>
+      </ul>
+    </div>
+    <div class="card group">
+      <span class="tag">Scores</span>
+      <ul>
+        <li><b>YARG scores import themselves</b><span>From YARG on the PC and, through Syncthing, on the Steam Deck. Only new bests are logged.</span></li>
+        <li><b>Linked profiles</b><span>Each YARG profile is matched to a person here.</span></li>
+        <li><b>Difficulties that count</b><span>Play only Expert? Easy plays on your profile won't count.</span></li>
+        <li><b>Hand your profile over</b><span>Someone else playing as you? Pick them, and their plays go to them.</span></li>
+        <li><b>Top performances</b><span>Averages per instrument and difficulty, and your best songs.</span></li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head">
+    <h2>How close the models are to a human</h2>
+    <p class="muted">Each model is tested on songs it never trained on, against the real human charts. The ceiling is two different humans charting the same song: they agree only that often, so no model can be expected to beat it.</p>
+  </div>
+  <div class="gap-grid">
+    <div class="card gap">
+      <h3>Guitar</h3>
+      <div class="big num">0.281 <small>of 0.516</small></div>
+      <div class="bar" role="img" aria-label="54% of the way to the human ceiling"><i style="width:54%"></i></div>
+      <dl><dt>Measure</dt><dd>exact frets F1</dd><dt>Way to the ceiling</dt><dd>54%</dd><dt>Notes at the right time</dt><dd>0.885</dd></dl>
+    </div>
+    <div class="card gap">
+      <h3>Bass</h3>
+      <div class="big num">0.476 <small>of 0.647</small></div>
+      <div class="bar" role="img" aria-label="74% of the way to the human ceiling"><i style="width:74%"></i></div>
+      <dl><dt>Measure</dt><dd>exact frets F1</dd><dt>Way to the ceiling</dt><dd>74%</dd><dt>Notes at the right time</dt><dd>0.905</dd></dl>
+    </div>
+    <div class="card gap">
+      <h3>Drums</h3>
+      <div class="big num">0.772 <small>of 0.851</small></div>
+      <div class="bar" role="img" aria-label="91% of the way to the human ceiling"><i style="width:91%"></i></div>
+      <dl><dt>Measure</dt><dd>right pad F1</dd><dt>Way to the ceiling</dt><dd>91%</dd><dt>Any hit at the right time</dt><dd>0.903</dd></dl>
+    </div>
+  </div>
+  <p class="faint">F1 runs from 0 to 1 and counts both missed notes and extra notes. "Exact frets" means the note is at the right time and on exactly the same frets as the human's.</p>
+
+  <div class="card chart">
+    <h3 style="margin-bottom:6px">Guitar, model by model</h3>
+    <p class="faint" style="margin-bottom:10px">Exact frets F1 on the same 39–41 test songs, with the human ceiling for scale.</p>
+    <svg viewBox="0 0 640 250" role="img" aria-label="Guitar exact frets F1 rose from 0.193 with Guitar 3 to 0.281 with Guitar 7; the human ceiling is 0.516">
+      <g stroke="#2a2f57" stroke-width="1">
+        <line x1="60" y1="200" x2="610" y2="200"/><line x1="60" y1="167.3" x2="610" y2="167.3"/><line x1="60" y1="134.5" x2="610" y2="134.5"/>
+        <line x1="60" y1="101.8" x2="610" y2="101.8"/><line x1="60" y1="69.1" x2="610" y2="69.1"/><line x1="60" y1="36.4" x2="610" y2="36.4"/>
+      </g>
+      <g fill="#7a80a8" font-size="12" text-anchor="end" font-family="Segoe UI, Figtree, sans-serif">
+        <text x="52" y="204">0</text><text x="52" y="171">0.1</text><text x="52" y="138">0.2</text><text x="52" y="106">0.3</text><text x="52" y="73">0.4</text><text x="52" y="40">0.5</text>
+      </g>
+      <line x1="60" y1="31.1" x2="610" y2="31.1" stroke="#ff4ca8" stroke-width="1.5" stroke-dasharray="6 5"/>
+      <text x="606" y="24" fill="#ff4ca8" font-size="12.5" font-weight="700" text-anchor="end" font-family="Segoe UI, Figtree, sans-serif">Human ceiling 0.516</text>
+      <defs><linearGradient id="fillg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#8b5cff" stop-opacity=".35"/><stop offset="1" stop-color="#8b5cff" stop-opacity="0"/></linearGradient></defs>
+      <path d="M80 136.8 L205 136.5 L330 123.7 L455 111.3 L580 108 L580 200 L80 200 Z" fill="url(#fillg)"/>
+      <polyline points="80,136.8 205,136.5 330,123.7 455,111.3 580,108" fill="none" stroke="#b14cff" stroke-width="3" stroke-linejoin="round"/>
+      <g fill="#eef0ff" font-size="12.5" font-weight="700" text-anchor="middle" font-family="Segoe UI, Figtree, sans-serif">
+        <circle cx="80" cy="136.8" r="4.5" fill="#b14cff"/><text x="80" y="155">0.193</text>
+        <circle cx="205" cy="136.5" r="4.5" fill="#b14cff"/><text x="205" y="125">0.194</text>
+        <circle cx="330" cy="123.7" r="4.5" fill="#b14cff"/><text x="330" y="112">0.233</text>
+        <circle cx="455" cy="111.3" r="4.5" fill="#b14cff"/><text x="455" y="100">0.271</text>
+        <circle cx="580" cy="108" r="6" fill="#ff4ca8"/><text x="580" y="94">0.281</text>
+      </g>
+      <g fill="#a3a9d1" font-size="12.5" text-anchor="middle" font-family="Segoe UI, Figtree, sans-serif">
+        <text x="80" y="222">Guitar 3</text><text x="205" y="222">Guitar 4</text><text x="330" y="222">Guitar 5</text><text x="455" y="222">Guitar 6</text><text x="580" y="222">Guitar 7</text>
+        <text x="80" y="239" fill="#7a80a8" font-size="11.5">Oct 25</text><text x="205" y="239" fill="#7a80a8" font-size="11.5">Oct 26</text><text x="330" y="239" fill="#7a80a8" font-size="11.5">Oct 26</text><text x="455" y="239" fill="#7a80a8" font-size="11.5">Nov 9</text><text x="580" y="239" fill="#7a80a8" font-size="11.5">Nov 10</text>
+      </g>
+    </svg>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head"><h2>Every model the app has used</h2><p class="muted">Gains are measured on held-out test songs against the model before it.</p></div>
+  <div class="card table">
+    <table>
+      <thead><tr><th>Model</th><th>Since</th><th>What changed</th><th>Measured gain</th></tr></thead>
+      <tbody>
+        <tr><td class="model">Guitar 1 · Bass 1 · Drums 1</td><td class="num">Oct 24</td><td>First learned models, replacing hand-written pitch rules. Beats 1 tracks beats and downbeats.</td><td>The start of learned charting</td></tr>
+        <tr><td class="model">Guitar 2 · Bass 2</td><td class="num">Oct 24</td><td>Decoding tuned on validation songs.</td><td>Thresholds set from data, not guesses</td></tr>
+        <tr><td class="model">Guitar 3 · Bass 3 · Drums 2</td><td class="num">Oct 25</td><td>v2 training set: bass learns from 734 songs instead of 252, using separated stems.</td><td>Guitar exact frets <span class="num">0.193</span>, bass <span class="num">0.455</span></td></tr>
+        <tr><td class="model">Guitar 4 · Bass 4</td><td class="num">Oct 26</td><td>Learns whether each note moves up, stays or moves down, the way charters follow a melody.</td><td><span class="up">Bass holds 0.584 → 0.676</span></td></tr>
+        <tr><td class="model">Guitar 5</td><td class="num">Oct 26</td><td>Learns how many frets each note has (chord size was the biggest guitar error).</td><td><span class="up">Exact frets 0.194 → 0.233</span></td></tr>
+        <tr><td class="model">Guitar Busy 1</td><td class="num">Oct 30</td><td>A side model for Rechart's Busier style that catches more fast notes.</td><td>An option, not the default</td></tr>
+        <tr><td class="model">Guitar 6</td><td class="num">Nov 9</td><td>A much bigger network that can look across the whole window for the same riff.</td><td><span class="up">Exact frets 0.233 → 0.271</span>, on time 0.862 → 0.877</td></tr>
+        <tr><td class="model">Guitar 7</td><td class="num">Nov 10</td><td>Hears the guitar stem from BS-RoFormer, a better separator.</td><td><span class="up">Exact frets 0.273 → 0.281</span>, on time 0.879 → 0.885</td></tr>
+        <tr><td class="model">Charting 3</td><td class="num">Nov 17</td><td>Held notes tuned for each model through the app's own decoding.</td><td><span class="up">Guitar holds 0.528 → 0.728</span>: 68% of real holds caught, up from 38%</td></tr>
+        <tr><td class="model">Bass 5</td><td class="num">Nov 17</td><td>Hears the bass stem from BS-RoFormer.</td><td><span class="up">Exact frets 0.463 → 0.476</span>, melody shape 0.909 → 0.928</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="faint">Charting 2 (Nov 17) also tidied tempo maps: bar 1 stays put, songs played to a click get one steady tempo, and the lead-in blip is gone.</p>
+</section>
+
+<section>
+  <div class="sec-head"><h2>Training data and experiments</h2></div>
+  <div class="twocol">
+    <div class="card">
+      <h3 style="margin-bottom:12px">Human charts learned from</h3>
+      <table>
+        <thead><tr><th>Set</th><th class="num">Songs</th><th class="num">Bass</th><th class="num">Drums</th></tr></thead>
+        <tbody>
+          <tr><td>v1 · Oct 24</td><td class="num">786</td><td class="num">252</td><td class="num">232</td></tr>
+          <tr><td>v2 · Oct 25</td><td class="num">790</td><td class="num">734</td><td class="num">248</td></tr>
+          <tr><td>v3 · Oct 24–Nov 17</td><td class="num">790</td><td class="num">734</td><td class="num">611</td></tr>
+          <tr><td><b>v4 · now</b></td><td class="num"><b>959</b></td><td class="num"><b>749</b></td><td class="num"><b>697</b></td></tr>
+        </tbody>
+      </table>
+      <p class="faint" style="margin-top:12px">v3 added five-lane drum charts converted to four lanes. v4 adds 190 charts from the last month, including .chart files and 27,133 tapped guitar notes. Only human charts are used: the app's own charts are never training data.</p>
+    </div>
+    <div class="card">
+      <h3 style="margin-bottom:12px">Tried, and not kept</h3>
+      <ul class="list">
+        <li><b>Song-wide pitch profile</b><span>Telling the model the song's range made guitar and bass slightly worse.</span></li>
+        <li><b>Extra weight on fast runs and solos</b><span>Exact frets dropped from 0.233 to 0.221.</span></li>
+        <li><b>Stereo guitar input</b><span>+0.005 exact frets: too small to be worth slower charting.</span></li>
+        <li><b>Higher-quality and BS-RoFormer drum input</b><span>Right-pad F1 fell (0.772 → 0.746 on BS-RoFormer stems).</span></li>
+        <li><b>Choosing the chord part or the riff per bar</b><span>Run 10: it chose correctly 84% of the time but charts came out the same (0.281 vs 0.283). Even perfect choices would only lift timing from 0.857 to 0.860.</span></li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="card now">
+    <span class="tag">Now training · run 11</span>
+    <h2>Guitar and bass on the bigger set, and guitar learns taps</h2>
+    <p class="muted">Same recipes as Guitar 7 and Bass 5, trained from scratch on 959 songs instead of 790, so the extra data is the only change. Guitar also gets a tap output, so charts can have tap notes where human charters use them (tapping riffs and solos). Guitar finishes around 7:50 PM, bass around 11 PM, then both are compared with the app's models. Nothing switches over without a look at the numbers.</p>
+    <div class="hopes">
+      <div><b>More songs, better notes</b><span>About a fifth more charts to learn from, many of them newer styles. Hoping exact frets climb past 0.281 without losing timing.</span></div>
+      <div><b>Tap notes</b><span>A new note type for our charts. Partway through training it already finds taps at 0.43 F1 on validation songs, up from 0.</span></div>
+      <div><b>Bass from more variety</b><span>15 more bass charts plus fresher stems. Hoping to edge past 0.476 exact frets.</span></div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head"><h2>What's next</h2><p class="muted">Training runs one at a time on the graphics card, in this order.</p></div>
+  <div class="road">
+    <div class="active"><div><b>Guitar and bass on the bigger set, with taps</b><span>Run 11, in progress. If it wins, charts start getting tap notes.</span></div><em>In progress</em></div>
+    <div><div><b>Drums with the bigger network</b><span>The network that lifted guitar the most (Guitar 6), applied to drums.</span></div><em>Next</em></div>
+    <div><div><b>Rhythm guitar part</b><span>A second guitar part for songs with a rhythm guitar. 25 human charts to start from.</span></div><em>Planned</em></div>
+    <div><div><b>Keys</b><span>A keyboard part for songs with piano or synth. 52 human charts to start from.</span></div><em>Planned</em></div>
+    <div><div><b>Note-by-note writer</b><span>A model that writes each note knowing the ones before it, the way a charter does, to close more of the gap to the ceiling.</span></div><em>Later</em></div>
+  </div>
+  <div class="twocol">
+    <div class="card">
+      <h3 style="margin-bottom:12px">App features planned</h3>
+      <ul class="list">
+        <li><b>Tap to fix</b><span>Fix a wrong note right on the note highway.</span></li>
+        <li><b>Learn from fixes</b><span>Those fixes become training data, so the models learn your taste.</span></li>
+        <li><b>Steam Deck scores</b><span>Finish the Deck's side of the score sync so Deck plays count too.</span></li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3 style="margin-bottom:12px">Later</h3>
+      <ul class="list">
+        <li><b>Use it from anywhere</b><span>A secure link with logins, so friends don't need to be on the same Wi-Fi.</span></li>
+        <li><b>Library clean-up</b><span>A few artist folder renames, and a new name for the project folder.</span></li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<footer>Numbers come from the app's training logs (data/v3/run.log and the compare logs) as of Nov 18, 2026. Test songs never take part in training or tuning.</footer>
+</div>
+</body>
+</html>

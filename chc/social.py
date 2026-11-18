@@ -621,6 +621,25 @@ def score_remove(name: str, key: str, inst: str, diff: str) -> None:
         _save()
 
 
+def scores_reset(name: str) -> int:
+    """Start this person's score history over: their bests and score news go, and YARG plays from
+    before now are no longer read in (scores_from). Returns how many bests went."""
+    k = key_of(name)
+    with _lock:
+        d = _d()
+        gone = len(d["scores"].pop(k, None) or {})
+        d["profiles"].setdefault(k, {})["scores_from"] = time.time()
+        d["events"] = [e for e in d["events"] if not (e["kind"] == "score" and key_of(e["who"]) == k)]
+        _save()
+    return gone
+
+
+def scores_from(name: str) -> float:
+    """When this person's score history starts (0: from the beginning)."""
+    with _lock:
+        return (_d()["profiles"].get(key_of(name)) or {}).get("scores_from", 0.0)
+
+
 def song_scores(key: str) -> list[dict]:
     """Everyone's best on one song: [{"name", "inst", "diff", "pct", "t"}], best first."""
     with _lock:
