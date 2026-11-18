@@ -7,6 +7,7 @@ import numpy as np
 TPQ = 480
 GRID = TPQ // 4  # notes snap to 16ths
 DIFF_BASE = {"expert": 96, "hard": 84, "medium": 72, "easy": 60}
+TAP_MARK = 104  # tap notes: the note under it is played by fretting alone (every difficulty at that tick)
 # (min ticks between guitar notes, number of lanes used)
 GUITAR_RULES = {"expert": (GRID, 5), "hard": (180, 5), "medium": (240, 4), "easy": (480, 3)}
 # per drum lane (0 kick, 1 red, 2 yellow, 3 blue, 4 green): min ticks between hits, None = drop
@@ -334,7 +335,8 @@ def _spb(tm):
 
 def guitar_notes(timed, tm: TempoMap, difficulty: str, inst: str = "guitar", cap: int | None = None):
     """timed: [(seconds, lane or lanes[, sustain_s, hammer_on])] -> [(tick, lane, length, force)]
-    reduced for the difficulty. force is "hopo", "strum" or None (let the game decide).
+    reduced for the difficulty. force is "hopo", "strum", "tap" or None (let the game decide);
+    hammer_on "tap" makes a tap note on Expert and Hard.
     Which notes Hard/Medium/Easy keep comes from the learned reduction (chc.reduce) when its
     model is available, else from GUITAR_RULES spacing."""
     gap, nlanes = GUITAR_RULES[difficulty]
@@ -371,7 +373,9 @@ def guitar_notes(timed, tm: TempoMap, difficulty: str, inst: str = "guitar", cap
         length = length if length >= MIN_SUSTAIN_TICKS else 1
         # hammer-ons only matter on expert/hard; the easier parts are spaced out and strummed
         force = None
-        if hopo is not None and difficulty in ("expert", "hard") and prev is not None:
+        if hopo == "tap" and difficulty in ("expert", "hard"):
+            force = "tap"
+        elif hopo is not None and difficulty in ("expert", "hard") and prev is not None:
             natural = tick - prev[0] <= HOPO_TICKS and len(lanes) == 1 and lanes != prev[1]
             if hopo and not natural and lanes != prev[1]:
                 force = "hopo"
@@ -434,6 +438,8 @@ def _events(notes_by_diff, drums=False):
             ev += [(tick, "note_on", note), (tick + length, "note_off", note)]
             if drums and n[2] and lane in TOM_MARK:
                 marks.add((tick, TOM_MARK[lane]))
+            elif not drums and n[3] == "tap":
+                marks.add((tick, TAP_MARK))
             elif not drums and n[3]:
                 marks.add((tick, DIFF_BASE[diff] + (5 if n[3] == "hopo" else 6)))
     for tick, mark in sorted(marks):

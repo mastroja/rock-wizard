@@ -5,6 +5,7 @@ them: each model gets its own Demucs stems and features and its own tuned decodi
 and the resulting chart notes are compared with the real charts."""
 import sys
 from collections import Counter
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -17,10 +18,11 @@ from . import data, metrics
 def load(path):
     ck = torch.load(path, map_location="cuda", weights_only=False)
     kind = ck.get("kind")
-    m = cnn.NoteNet(kind, ck.get("hidden", 128), ck["state"]["out.weight"].shape[0], ck.get("context", False),
-                     ck.get("down", cnn.DOWN), ck.get("layers", 0), ck.get("wide", 1)).cuda()
-    m.load_state_dict(ck["state"])
-    m.eval()
+    m = cnn.from_checkpoint(ck, "cuda")
+    inst = cnn.instrument(kind)
+    if Path(path).resolve() == (ml.MODEL_DIR / f"{inst}.pt").resolve() and ml.PLAY_HOLDS.get(ml.model_tag(inst)):
+        # the app's own model: score it with the holds rule the app charts with (ml.PLAY_HOLDS)
+        ck["decode"] = {**ck.get("decode", {}), **ml.PLAY_HOLDS[ml.model_tag(inst)]}
     return ck, kind, m, data.Layout(ck.get("data", "v2"), ck.get("dm_src", "ft"))
 
 
@@ -78,9 +80,11 @@ def score(inst, ck, kind, model, layout, rows):
     shape = {"pairs": 0, "direction": 0, "interval": 0}
     h = [0, 0, 0]
     su = [0, 0, 0]
+    tp_ = [0, 0, 0]
     for i, s in rows:
-        p = cnn.predict(model, np.load(layout.dm(i, s, kind)), "cuda")
-        got = ml.decode_fretted(inst, p, **settings)
+        p, tail = cnn.split_tail(model, cnn.predict(model, np.load(layout.dm(i, s, kind)), "cuda", tail=True))
+        got = ml.decode_fretted(inst, p, taps=tail.get("tap"), **settings)
+        tapped = data.taps(s, inst)
         notes += got
         truth = data.events(s, inst)
         res.append(metrics.score([(t, l) for t, lanes, *_ in got for l in lanes], truth))
@@ -94,7 +98,8 @@ def score(inst, ck, kind, model, layout, rows):
             j = int(np.argmin(abs(times - n[0])))
             if abs(times[j] - n[0]) > metrics.TOL:
                 continue
-            for acc, pred, true in ((h, bool(got[j][3]), bool(n[3])), (su, got[j][2] > 0, n[2] > 0)):
+            for acc, pred, true in ((h, bool(got[j][3]), bool(n[3])), (su, got[j][2] > 0, n[2] > 0),
+                                    (tp_, got[j][3] == "tap", data.is_tap(tapped, n[0]))):
                 if pred and true:
                     acc[0] += 1
                 elif pred:
@@ -110,6 +115,7 @@ def score(inst, ck, kind, model, layout, rows):
             "same jump size": shape["interval"] / max(1, shape["pairs"]),
             "hammer-on F1": data.prf(*h)[2],
             "sustain F1": data.prf(*su)[2],
+            "tap F1": data.prf(*tp_)[2],
             "chords 1/2/3": " / ".join(f"{c[k] / tot:.0%}" for k in (1, 2, 3))}
 
 

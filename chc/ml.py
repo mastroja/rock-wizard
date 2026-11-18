@@ -41,6 +41,7 @@ def load(kind: str, device=None):
         m = nn.NoteNet(fkind, ck.get("hidden", 128), n_out, ck.get("context", False), ck.get("down", nn.DOWN),
                        ck.get("layers", 0), ck.get("wide", 1)).to(device)
         m.load_state_dict(ck["state"])
+        m.tail = nn.tail_of(ck)
         m.eval()
         _cache[kind] = (m, ck.get("thr", 0.4))
         _meta[kind] = {"features": fkind, "stems": ck.get("dm_src", "ft")}
@@ -66,13 +67,16 @@ def to_model_rate(wave: np.ndarray, sr: int, device="cuda", target: int = featur
     return torchaudio.functional.resample(x, sr, target).cpu().numpy()
 
 
-def probabilities(kind: str, wave: np.ndarray, sr: int, device=None, with_features=False):
-    """Per-frame model probabilities (T, outputs); with_features also returns the input features."""
+def probabilities(kind: str, wave: np.ndarray, sr: int, device=None, with_features=False, tail=False):
+    """Per-frame model probabilities (T, outputs); with_features also returns the input features.
+    tail: (probabilities, {tail output: column}) with the model's tail outputs (nn.TAP, nn.PART)."""
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     model, _ = load(kind, device)
     fkind = _meta[kind]["features"]
     feats = features.compute(to_model_rate(wave, sr, device, features.rate(fkind)), fkind, device)
-    prob = nn.predict(model, feats, device)
+    prob = nn.predict(model, feats, device, tail=tail)
+    if tail:
+        prob = nn.split_tail(model, prob)
     return (prob, feats) if with_features else prob
 
 
@@ -182,13 +186,13 @@ def fretted_notes(kind: str, wave: np.ndarray, sr: int, with_features=False, sty
     style: "normal", "cleaner" (fewer notes) or "busier" (guitar only: the model that charts more)."""
     model = BUSIER if style == "busier" else kind
     load(model)
-    prob, feats = probabilities(model, wave, sr, with_features=True)
+    (prob, tail), feats = probabilities(model, wave, sr, with_features=True, tail=True)
     settings = play_settings(kind, model)
     if model == kind:  # what the owner has said about this model's charts
         settings = feedback.tuned(kind, settings, model_tag(kind))
     if style == "cleaner":
         settings["thr"] += CLEANER_THR
-    notes = decode_fretted(kind, prob, **settings)
+    notes = decode_fretted(kind, prob, taps=tail.get("tap"), **settings)
     return (notes, feats) if with_features else notes
 
 
@@ -202,7 +206,7 @@ def _hold_run(sustain: np.ndarray, thr: float) -> int:
 
 
 def decode_fretted(kind: str, prob: np.ndarray, thr=0.35, ratios=None, hopo=0.5, sus=0.5, rel=1.0,
-                   size_bias=(1.0, 1.0), max_chord=None, min_hold=None, gap_hold=None):
+                   size_bias=(1.0, 1.0), max_chord=None, min_hold=None, gap_hold=None, taps=None, tap=0.5):
     """Model probabilities -> notes.
 
     Note times are peaks of the strongest lane probability. A second (third) lane joins
@@ -251,6 +255,8 @@ def decode_fretted(kind: str, prob: np.ndarray, thr=0.35, ratios=None, hopo=0.5,
         length, hopo = 0.0, None
         if has_attr:
             hopo = bool(prob[max(0, fr - 2): fr + 3, 5].max() > hopo_thr)
+            if taps is not None and taps[max(0, fr - 2): fr + 3].max() > tap:
+                hopo = "tap"  # a tap note (models trained with --tap: the taps column, threshold tap)
             nxt = frames[k + 1] if k + 1 < len(frames) else len(prob)
             after = prob[fr + 2: nxt, 6]
             n = _hold_run(after, sus_thr)

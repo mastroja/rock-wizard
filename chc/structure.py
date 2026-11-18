@@ -124,10 +124,12 @@ def consistent_fretted(notes, beatmap, groups, keep_half_conf=0.6, unit=BAR, bes
             lanes = c.most_common(1)[0][0]
             hits = [h for p, _, hs in pattern if p == pos for h in hs]
             lens = [beatmap.tick(n[0] + n[2]) - tick if n[2] > 0 else 0 for tick, n in hits]
-            hopos = [bool(n[3]) for _, n in hits if n[3] is not None]
+            hopos = [n[3] for _, n in hits if n[3] is not None]
             conf = float(np.mean([n[4] if len(n) > 4 else 0.5 for _, n in hits]))
-            out.append((pos, (lanes, int(np.median(lens)),
-                              (sum(hopos) * 2 > len(hopos)) if hopos else None, conf)))
+            flag = None
+            if hopos:  # most copies tapped: a tap; else most not strummed: a hammer-on
+                flag = "tap" if sum(h == "tap" for h in hopos) * 2 > len(hopos) else sum(map(bool, hopos)) * 2 > len(hopos)
+            out.append((pos, (lanes, int(np.median(lens)), flag, conf)))
         return out
 
     # vote on positions first (any lanes), then pick lanes per position

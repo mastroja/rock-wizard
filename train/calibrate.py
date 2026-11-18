@@ -24,14 +24,13 @@ def main():
     inst, path = sys.argv[1], sys.argv[2]
     ck = torch.load(path, map_location="cuda", weights_only=False)
     kind = ck.get("kind", inst)  # feature kind the model was trained on
-    model = cnn.NoteNet(kind, ck.get("hidden", 128), ck["state"]["out.weight"].shape[0], ck.get("context", False),
-                         ck.get("down", cnn.DOWN), ck.get("layers", 0), ck.get("wide", 1)).cuda()
-    model.load_state_dict(ck["state"])
+    model = cnn.from_checkpoint(ck, "cuda", kind)
     layout = data.Layout(ck.get("data", "v2"), ck.get("dm_src", "ft"))
     index = layout.index()
     rows = [(i, s) for i, s in enumerate(index) if inst in s["notes"] and data.split_of(s) == "val"
             and layout.dm(i, s, kind).exists()]
-    probs = [cnn.predict(model, np.load(layout.dm(i, s, kind)), "cuda") for i, s in rows]
+    both = [cnn.split_tail(model, cnn.predict(model, np.load(layout.dm(i, s, kind)), "cuda", tail=True)) for i, s in rows]
+    probs, tails = [b[0] for b in both], [b[1] for b in both]
     truths = [data.events(s, inst) for _, s in rows]
     gt_notes = [n for _, s in rows for n in s["notes"][inst]]
     print(f"{len(rows)} val songs; real charts: {chord_mix(gt_notes)}")
@@ -123,6 +122,24 @@ def main():
         rule, sc, _ = tune_holds.choose(inst, base, [(p, s["notes"][inst]) for p, (_, s) in zip(probs, rows)])
         decode |= rule
         print(tune_holds.show(f"holds {rule}", sc))
+    if "tap" in (model.tail or []):
+        # tap threshold judged on the real notes, like hammer-ons
+        scores = []
+        for th in (0.3, 0.4, 0.5, 0.6, 0.7, 0.8):
+            acc = [0, 0, 0]
+            for tl, (_, song) in zip(tails, rows):
+                tapped = data.taps(song, inst)
+                for n in song["notes"][inst]:
+                    fr = int(round(n[0] * features.FPS))
+                    if not 0 <= fr < len(tl["tap"]):
+                        continue
+                    pr, tr = tl["tap"][max(0, fr - 2): fr + 3].max() > th, data.is_tap(tapped, n[0])
+                    acc[0 if pr and tr else 1 if pr else 2] += pr or tr
+            scores.append((data.prf(*acc)[2], th))
+            print(f"  tap threshold {th}: tap F1 {scores[-1][0]:.3f}")
+        f, th = max(scores)
+        decode["tap"] = th
+        print(f"tap: threshold {th} F1 {f:.3f}")
     ck["decode"] = decode
     torch.save(ck, path)
     print("saved", decode, "->", path)

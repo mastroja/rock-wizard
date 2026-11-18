@@ -30,16 +30,44 @@ SIZE = ["1 fret", "2 frets", "3 frets"]
 # optional last output (train --onset, after those): a note starts here, whatever its frets.
 # Note times otherwise come from the strongest lane, which blurs in fast runs that change lanes.
 ONSET = ["onset"]
+# optional output after those (train --tap): this note is a tap (fretting it is enough, no strum).
+TAP = ["tap"]
 # optional outputs after all of those (train --part, needs --size): does the real chart play the
 # chord part or the riff in this bar? Where a song layers a riff under chords, human charters pick
-# one per section. predict() leaves them out unless asked, so decoding sees the usual channels.
+# one per section.
 PART = ["chord part", "riff part"]
+# TAP and PART are a model's "tail": predict() leaves them out unless asked, so decoding, which
+# reads the other outputs by position, sees the usual channels. The checkpoint says which it has.
 
 
-def n_part(kind: str, n_out: int) -> int:
-    """How many of a model's outputs are part outputs (PART): only --part models (which need
-    --size) have 15 or 16 guitar/bass outputs."""
-    return len(PART) if instrument(kind) in ("guitar", "bass") and n_out in (15, 16) else 0
+def tail_of(ck: dict) -> list[str]:
+    """Names of a checkpoint's tail outputs, in order."""
+    return (TAP if ck.get("tap") else []) + (PART if ck.get("part") else [])
+
+
+def n_tail(model) -> int:
+    tail = getattr(model, "tail", None)
+    if tail is None:  # built without its checkpoint's word: --part models had 15 or 16 outputs
+        return len(PART) if instrument(model.kind) in ("guitar", "bass") and model.n_out in (15, 16) else 0
+    return len(tail)
+
+
+def split_tail(model, prob: np.ndarray):
+    """predict(..., tail=True) output -> (the usual outputs, {tail name: its column})."""
+    k = n_tail(model)
+    names = model.tail if getattr(model, "tail", None) is not None else PART[:k]
+    main = prob[:, :prob.shape[1] - k]
+    return main, {n: prob[:, prob.shape[1] - k + j] for j, n in enumerate(names)}
+
+
+def from_checkpoint(ck: dict, device, kind: str | None = None):
+    """The NoteNet a checkpoint holds, in eval mode, knowing its tail outputs."""
+    m = NoteNet(kind or ck.get("kind"), ck.get("hidden", 128), ck["state"]["out.weight"].shape[0],
+                ck.get("context", False), ck.get("down", DOWN), ck.get("layers", 0), ck.get("wide", 1)).to(device)
+    m.load_state_dict(ck["state"])
+    m.tail = tail_of(ck)
+    m.eval()
+    return m
 
 
 def instrument(kind: str) -> str:
@@ -66,6 +94,7 @@ class NoteNet(nn.Module):
         self.down = down
         self.layers = layers
         self.n_out = n_out or len(CHANNELS[kind])
+        self.tail = None  # names of the tail outputs (TAP, PART), from the checkpoint (from_checkpoint)
         self.context = context
         n_bins = features.n_bins(kind)
         self.in_ch = features.channels(kind)  # stacked signals (stereo guitar: mid, side, keys)
@@ -114,9 +143,9 @@ class NoteNet(nn.Module):
 
 
 @torch.no_grad()
-def predict(model: NoteNet, feats: np.ndarray, device="cuda", chunk=4096, pad=256, parts=False) -> np.ndarray:
-    """Probabilities (T, n_out) for a whole song, processed in overlapping chunks. The part
-    outputs (PART) are left off unless parts is set."""
+def predict(model: NoteNet, feats: np.ndarray, device="cuda", chunk=4096, pad=256, tail=False) -> np.ndarray:
+    """Probabilities (T, n_out) for a whole song, processed in overlapping chunks. The tail
+    outputs (TAP, PART) are left off unless tail is set (split_tail separates them)."""
     model.eval()
     if model.layers:  # a chunk's edges should see as far as its middle does
         pad = 1024
@@ -131,8 +160,8 @@ def predict(model: NoteNet, feats: np.ndarray, device="cuda", chunk=4096, pad=25
         p = torch.sigmoid(model(x[a:b][None], prof))[0].cpu().numpy()
         out[start:min(T, start + chunk)] = p[start - a: start - a + min(chunk, T - start)]
         start += chunk
-    k = n_part(model.kind, model.n_out)
-    return out if parts or not k else out[:, :-k]
+    k = n_tail(model)
+    return out if tail or not k else out[:, :-k]
 
 
 def pick(prob: np.ndarray, thresholds, min_gap_frames=3) -> list[tuple[int, int, float]]:

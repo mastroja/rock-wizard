@@ -91,6 +91,16 @@ def events(song: dict, kind: str):
     return out
 
 
+def taps(song: dict, kind: str) -> np.ndarray:
+    """Times of the real chart's tapped notes (index_library's "taps"), sorted."""
+    return np.array(sorted((song.get("taps") or {}).get(base(kind), [])), float)
+
+
+def is_tap(tapped: np.ndarray, t: float) -> bool:
+    j = np.searchsorted(tapped, t - 0.002)
+    return bool(j < len(tapped) and tapped[j] <= t + 0.002)
+
+
 def attributes(song: dict, kind: str):
     """Guitar/bass -> ([hammer-on note times], [(start, end) of sustains])."""
     hopo, sus = [], []

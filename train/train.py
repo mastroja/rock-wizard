@@ -1,13 +1,14 @@
 """python -m train.train <kind> [--steps N] [--out models/x.pt] [--dm-frac 0.6]
                            [--data v2|v3] [--dm-src ft|s6|sw] [--rel] [--size] [--onset]
-                           [--focus 3] [--solo-frac 0.25] [--down 2] [--part] [--init models/x.pt]
+                           [--focus 3] [--solo-frac 0.25] [--down 2] [--tap] [--part] [--init models/x.pt]
 
 kind is the feature/model kind (guitar, guitar_hr, bass, bass_hr, drums, mix). --data v3 reads
 the song-id layout built by separate_v3 + feats_v3; --dm-src picks which Demucs model's stems
 to learn from (s6 = htdemucs_6s's real guitar stem, sw = BS-RoFormer SW's, see separate_sw); --rel adds up/same/down fret outputs.
 --focus weighs fast runs and guitar solos more in the loss (the most missed notes), --solo-frac
 starts that share of windows inside a solo, --onset adds a lane-free note-start output and
---down sets how coarse in time the recurrent layer runs. --part adds two outputs per bar: does the
+--down sets how coarse in time the recurrent layer runs. --tap adds a tap-note output (the real
+chart's tapped notes, data.taps). --part adds two outputs per bar: does the
 real chart play the chord part or the riff there (data.bar_parts). --init starts from another
 model's weights (new outputs start fresh), to fine-tune it rather than train from scratch."""
 import argparse
@@ -34,13 +35,14 @@ class Bank:
     """Memory-mapped features plus lazily built targets for a set of songs."""
 
     def __init__(self, kind, items, path, n_out=None, context=False, focus=1.0, solo_frac=0.0,
-                 onset=False, pitch_aug=0, part=False):
+                 onset=False, pitch_aug=0, part=False, tap=False):
         """path(i, song, kind) -> feature file. focus: loss weight for frames in fast runs and
         guitar solos; solo_frac: share of windows placed in a solo; onset: last output is a
         lane-free note start; pitch_aug: transpose windows by up to this many semitones."""
         self.kind, self.items = kind, items
         self.focus, self.solo_frac, self.onset, self.pitch_aug = focus, solo_frac, onset, pitch_aug
-        self.part = part
+        self.part, self.tap = part, tap
+        self.taps = {}  # tapped note times per song (--tap)
         self.bars = {}  # (start, end, chords, riff) per bar of the real chart (--part)
         self.solos = {}  # guitar solo sections (seconds) per song, from the chart's solo markers
         self.n_ch = n_out or len(cnn.CHANNELS[kind])
@@ -68,6 +70,8 @@ class Bank:
                 self.sizes[i] = data.chord_sizes(s, kind)
             if part:
                 self.bars[i] = data.bar_parts(s, kind)
+            if tap:
+                self.taps[i] = data.taps(s, kind)
             mid = Path(s["folder"]) / "notes.mid"
             if (focus != 1.0 or solo_frac) and cnn.instrument(kind) == "guitar" and mid.exists():
                 try:
@@ -123,6 +127,9 @@ class Bank:
         if self.onset:
             col = nl + 8
             y[:, col] = data.targets([(t, 0) for t in starts], len(x), 1)[:, 0]
+        if self.tap:  # the tap column comes just before the part ones
+            col = self.n_ch - 1 - (len(cnn.PART) if self.part else 0)
+            y[:, col] = data.targets([(t - t0, 0) for t in self.taps.get(i, ()) if _in(t, t0, t1)], len(x), 1)[:, 0]
         if self.part:
             k = len(cnn.PART)
             for b0, b1, chords, riff in self.bars.get(i, []):
@@ -190,13 +197,14 @@ def attribute_scores(probs, songs, kind):
 def evaluate(model, items, kind, device, path, thresholds=None, grid=(0.2, 0.3, 0.4, 0.5, 0.6)):
     """Return (best lane-aware (P,R,F1), thr), any-lane (P,R,F1), attribute scores or None."""
     n_l = cnn.n_lanes(kind)
-    probs, truths, parts = [], [], []
-    k = cnn.n_part(kind, model.n_out)
+    probs, truths, parts, taps = [], [], [], []
     for i, s in items:
-        p = cnn.predict(model, np.load(path(i, s, kind)), device, parts=True)
-        probs.append(p[:, :-k] if k else p)
-        if k:
-            parts.append((p[:, -k:], data.bar_parts(s, kind)))
+        p, tail = cnn.split_tail(model, cnn.predict(model, np.load(path(i, s, kind)), device, tail=True))
+        probs.append(p)
+        if cnn.PART[0] in tail:
+            parts.append((np.stack([tail[n] for n in cnn.PART], 1), data.bar_parts(s, kind)))
+        if "tap" in tail:
+            taps.append((tail["tap"], s))
         truths.append(data.events(s, kind))
     best = None
     for thr in (grid if thresholds is None else [thresholds]):
@@ -217,9 +225,22 @@ def evaluate(model, items, kind, device, path, thresholds=None, grid=(0.2, 0.3, 
     attrs = None
     if model.n_out > n_l:
         attrs = attribute_scores(probs, [s for _, s in items], kind)
-        if k:
-            attrs = (*attrs, part_accuracy(parts))
+        attrs = (*attrs, part_accuracy(parts) if parts else None, tap_scores(taps, kind) if taps else None)
     return best, data.prf(tp, fp, fn), attrs
+
+
+def tap_scores(taps, kind, thr=0.5):
+    """Tap calls on the real notes: (P, R, F1) of "this note is a tap"."""
+    acc = [0, 0, 0]
+    for p, song in taps:
+        tapped = data.taps(song, kind)
+        for n in song["notes"][data.base(kind)]:
+            fr = int(round(n[0] * features.FPS))
+            if not 0 <= fr < len(p):
+                continue
+            pred, true = p[max(0, fr - 2): fr + 3].max() > thr, data.is_tap(tapped, n[0])
+            acc[0 if pred and true else 1 if pred else 2] += pred or true
+    return data.prf(*acc)
 
 
 def part_accuracy(parts):
@@ -277,6 +298,7 @@ def main():
     ap.add_argument("--wide", type=int, default=1, help="multiplies the convolution filters")
     ap.add_argument("--pitch-aug", type=int, default=0, help="transpose training windows by up to this many semitones")
     ap.add_argument("--lr", type=float, default=2e-3)
+    ap.add_argument("--tap", action="store_true", help="also learn which notes are taps (guitar/bass)")
     ap.add_argument("--part", action="store_true",
                     help="also learn, per bar, whether the real chart plays the chord part or the riff (needs --size)")
     ap.add_argument("--init", default=None, help="start from this model's weights (fine-tuning)")
@@ -315,6 +337,10 @@ def main():
         if not args.size:
             raise SystemExit("--onset needs --size (the output comes after the chord-size ones)")
         n_out += len(cnn.ONSET)
+    if args.tap:
+        if cnn.n_lanes(args.kind) == len(cnn.CHANNELS[args.kind]):
+            raise SystemExit("--tap is for guitar/bass")
+        n_out += len(cnn.TAP)
     if args.part:
         if not args.size:
             raise SystemExit("--part needs --size (the outputs come last, after the chord-size and onset ones)")
@@ -322,17 +348,18 @@ def main():
     banks, weights = [], []
     if train_items:
         banks.append(Bank(args.kind, train_items, layout.clean, n_out, args.context, args.focus,
-                          args.solo_frac, args.onset, args.pitch_aug, args.part))
+                          args.solo_frac, args.onset, args.pitch_aug, args.part, args.tap))
         weights.append(1 - args.dm_frac if dm_items else 1.0)
     if dm_items and args.dm_frac > 0:
         banks.append(Bank(args.kind, dm_items, layout.dm, n_out, args.context, args.focus,
-                          args.solo_frac, args.onset, args.pitch_aug, args.part))
+                          args.solo_frac, args.onset, args.pitch_aug, args.part, args.tap))
         weights.append(args.dm_frac if train_items else 1.0)
     weights = np.array(weights) / sum(weights)
     rng = np.random.default_rng(0)
     if args.focus != 1.0 or args.solo_frac:
         print(f"solo sections in {sum(len(b.solo_items) for b in banks)} training songs", flush=True)
     model = cnn.NoteNet(args.kind, args.hidden, n_out, args.context, args.down, args.layers, args.wide).to(device)
+    model.tail = cnn.tail_of({"tap": args.tap, "part": args.part})
     n_l = cnn.n_lanes(args.kind)
     if args.init:
         init = torch.load(args.init, map_location=device, weights_only=False)["state"]
@@ -355,6 +382,8 @@ def main():
         pw[n_l + 2:] = 3.0
     if args.onset:
         pw[n_l + 8] = 6.0  # note starts are as sparse as the lanes' ones
+    if args.tap:
+        pw[n_out - 1 - (len(cnn.PART) if args.part else 0)] = 6.0  # taps are a few percent of notes
     if args.part:
         pw[-len(cnn.PART):] = 1.0  # a part covers whole bars, not single frames
     bce = tnn.BCEWithLogitsLoss(pos_weight=pw, reduction="none")
@@ -369,7 +398,7 @@ def main():
                     "n_out": n_out, "data": args.data, "dm_src": args.dm_src, "rel": args.rel,
                     "context": args.context, "size": args.size, "onset": args.onset, "down": args.down,
                     "focus": args.focus, "solo_frac": args.solo_frac, "layers": args.layers, "wide": args.wide,
-                    "win": args.win, "pitch_aug": args.pitch_aug, "part": args.part,
+                    "win": args.win, "pitch_aug": args.pitch_aug, "part": args.part, "tap": args.tap,
                     "init": args.init}, out)
 
     # resumable snapshot: everything needed to carry on exactly where training stopped
@@ -421,6 +450,8 @@ def main():
                     msg += f" | chord size acc {attrs[3]:.3f}"
                 if len(attrs) > 4 and attrs[4] is not None:
                     msg += f" | part acc {attrs[4]:.3f}"
+                if len(attrs) > 5 and attrs[5] is not None:
+                    msg += f" | tap F1 {attrs[5][2]:.3f}"
             print(msg, flush=True)
             if f > best_f:  # keep the best checkpoint, not just the last
                 best_f = f
